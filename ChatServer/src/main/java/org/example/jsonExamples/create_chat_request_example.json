@@ -1,0 +1,12 @@
+{
+  "from_user": {
+    "id": 2,
+    "username": "Abobka22"
+  },
+
+  "request_type": "CREATE_CHAT",
+  "request_body": {
+    "id": 3,
+    "username": "Amogus22"
+  }
+}

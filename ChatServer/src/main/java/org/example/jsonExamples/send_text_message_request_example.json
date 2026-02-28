@@ -1,0 +1,12 @@
+{
+  "from_user": {
+    "id": 1,
+    "username": "Abobka22"
+  },
+
+  "request_type": "SEND_TEXT_MESSAGE",
+  "request_body": {
+    "chat_id": 1,
+    "text": "Hello"
+  }
+}

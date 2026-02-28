@@ -1,0 +1,18 @@
+{
+  "from_user": {
+    "id": 2,
+    "username": "user12345"
+  },
+
+  "request_type": "SEND_TEXT_MESSAGE",
+  "request_body": {
+
+    "from_user": {
+      "id": 2,
+      "username": "user12345"
+    },
+
+    "to_chat_id": 2,
+    "text": "Ну здарова"
+  }
+}
