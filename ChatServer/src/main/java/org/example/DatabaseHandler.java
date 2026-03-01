@@ -2,6 +2,7 @@ package org.example;
 
 import org.example.messages.Message;
 import org.example.messages.TextMessage;
+import org.jetbrains.annotations.NotNull;
 
 import java.sql.*;
 import java.time.LocalDateTime;
@@ -11,13 +12,18 @@ import java.util.List;
 
 public class DatabaseHandler {
     private static final String url = "DB_URL";
-    private static final String username = DB_USERNAME
+    private static final String username = "DB_USERNAME";
     private static final String password = "DB_PASSWORD";
 
     private static final String ERROR_TEMPLATE =
             ConsoleColor.RED +
             "[DATABASE]: An error occurred while trying to %s: \n%s" +
             ConsoleColor.RESET_COLOR + "\n";
+
+    private static final String WARNING_TEMPLATE =
+            ConsoleColor.YELLOW +
+            "[DATABASE]: WARNING! %s while trying to %s\n(%s)" +
+            ConsoleColor.RESET_COLOR;
 
     public static Connection getConnection(){
         try {
@@ -245,11 +251,11 @@ public class DatabaseHandler {
     }
 
     /**
-     *
+     * this method adds {@link Message} object from client to the database and sets
+     * {@code date} and {@code messageID} fields for this object
      * @param message {@link Message} object from client
-     * @return {@link Message} object with all fields, that was saved to database and will be sent to clients by server
      */
-    public static Message addMessage(Message message){
+    public static boolean addMessage(Message message){
         Connection connection = getConnection();
 
         int chatID = message.getChatID();
@@ -276,36 +282,61 @@ public class DatabaseHandler {
 
                     if (selectResult.next()){
                         Timestamp timestamp = selectResult.getTimestamp("date");
-                        Date date = new Date(timestamp.getTime());
-                        Calendar calendar = Calendar.getInstance();
-                        calendar.setTime(date);
+                        LocalDateTime dateTime = getLocalDateTime(timestamp);
 
-                        int day = calendar.get(Calendar.DAY_OF_MONTH);
-                        int month = calendar.get(Calendar.MONTH);
-                        int year = calendar.get(Calendar.YEAR);
-                        //24 hour format(not AM/PM)
-                        int hour = calendar.get(Calendar.HOUR_OF_DAY);
-                        int minute = calendar.get(Calendar.MINUTE);
-
-                        LocalDateTime dateTime = LocalDateTime.of(year,month,day,hour,minute);
-
-                        //TODO: тут продолжать(По идее дальше нужно в объект Message устанавливать message id и date)
+                        message.setMessageID(messageId);
+                        message.setDate(dateTime);
+                        return true;
                     }
                     else{
-                        System.out.println("[DATABASE]: Something went wrong while trying to add new message!(DatabaseHandler: 270)");
-                        return null;
+                        System.out.printf(
+                                WARNING_TEMPLATE,
+                                "Selection query returned nothing",
+                                "select new message from the database",
+                                "addMessage method"
+                        );
+                        return false;
                     }
+
+                    //Photo messages handling or other
 
                 }
                 else {
-                    //Something wrong
+                    System.out.printf(
+                            WARNING_TEMPLATE,
+                            "Insertion query returned nothing",
+                            "receive generated id of new message from the database",
+                            "addMessage method"
+                    );
+                    return false;
                 }
             }
 
         }
         catch (SQLException e){
-
+            System.out.printf(
+                    ERROR_TEMPLATE,
+                    "add new message to the database",
+                    e.getMessage()
+            );
+            return false;
         }
-        return null;
+        return false;
+    }
+
+    @NotNull
+    private static LocalDateTime getLocalDateTime(Timestamp timestamp) {
+        Date date = new Date(timestamp.getTime());
+        Calendar calendar = Calendar.getInstance();
+        calendar.setTime(date);
+
+        int day = calendar.get(Calendar.DAY_OF_MONTH);
+        int month = calendar.get(Calendar.MONTH);
+        int year = calendar.get(Calendar.YEAR);
+        //24 hour format(not AM/PM)
+        int hour = calendar.get(Calendar.HOUR_OF_DAY);
+        int minute = calendar.get(Calendar.MINUTE);
+
+        return LocalDateTime.of(year,month,day,hour,minute);
     }
 }
