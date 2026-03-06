@@ -11,7 +11,7 @@ import java.util.List;
 
 public class DatabaseHandler {
     private static final String url = "DB_URL";
-    private static final String username = DB_USERNAME
+    private static final String username = "DB_USERNAME";
     private static final String password = "DB_PASSWORD";
 
     private static final String ERROR_TEMPLATE =
@@ -309,3 +309,4 @@ public class DatabaseHandler {
         return null;
     }
 }
+
