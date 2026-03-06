@@ -29,4 +29,9 @@ public class Chat implements Serializable {
     public User getUser2() {
         return user2;
     }
+
+    //Array from 2 elements
+    public User[] getUsers(){
+        return new User[]{user1, user2};
+    }
 }

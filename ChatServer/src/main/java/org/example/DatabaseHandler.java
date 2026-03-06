@@ -270,9 +270,11 @@ public class DatabaseHandler {
                 prstmt.setInt(2, userID);
                 prstmt.setString(3, ((TextMessage) message).getText());
 
-                ResultSet insertResult = prstmt.executeQuery();
+                prstmt.executeUpdate();
+                ResultSet insertResult = prstmt.getGeneratedKeys();
+
                 if (insertResult.next()){
-                    int messageId = insertResult.getInt("id");
+                    int messageId = insertResult.getInt(1);
                     String selectMessage ="select * from messages where id = ?";
 
                     prstmt = connection.prepareStatement(selectMessage);

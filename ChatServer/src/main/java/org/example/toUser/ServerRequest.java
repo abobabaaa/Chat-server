@@ -14,9 +14,9 @@ public class ServerRequest {
     @SerializedName("request_type")
     private Type requestType;
     @SerializedName(value = "request_body")
-    private Serializable requestBody;
+    private Object requestBody;
 
-    public ServerRequest(InetAddress toIp, User toUser, Type requestType, Serializable requestBody) {
+    public ServerRequest(InetAddress toIp, User toUser, Type requestType, Object requestBody) {
         this.toIp = toIp;
         this.toUser = toUser;
         this.requestType = requestType;
@@ -35,11 +35,11 @@ public class ServerRequest {
         return requestType;
     }
 
-    public Serializable getRequestBody() {
+    public Object getRequestBody() {
         return requestBody;
     }
 
     public enum Type{
-        ERROR, SUCCESSFUL_CONNECTION, CHAT_CREATED
+        ERROR, SUCCESSFUL_CONNECTION, CHAT_CREATED, RECEIVE_MESSAGE
     }
 }

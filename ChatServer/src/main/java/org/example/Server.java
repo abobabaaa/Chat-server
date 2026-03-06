@@ -346,9 +346,50 @@ public class Server {
                                     }
                                     if (toChat != null){
                                         TextMessage textMessage = new TextMessage(toChatID, fromUser, msgText);
+                                        boolean isSuccess = DatabaseHandler.addMessage(textMessage);
+
+                                        if (isSuccess){
+                                            User receiver = null;
+                                            for (User usr : toChat.getUsers()){
+                                                if (usr.getUserID() != fromUser.getUserID()){
+                                                    receiver = usr;
+                                                    break;
+                                                }
+                                            }
+
+                                            if (receiver != null){
+                                                for (User usr : onlineUsers){
+                                                    if (usr.getUserID() == receiver.getUserID()){
+
+
+                                                        User onlineUsr = null;
+                                                        for (User usrr : onlineUsers){
+                                                            if (usrr.getUserID() == usr.getUserID()){
+                                                                onlineUsr = usrr;
+                                                            }
+                                                        }
+
+                                                        assert onlineUsr != null;
+                                                        ServerRequest serverRequest = new ServerRequest(
+                                                                onlineUsr.getClient().getInetAddress(),
+                                                                onlineUsr,
+                                                                ServerRequest.Type.RECEIVE_MESSAGE,
+                                                                textMessage
+                                                        );
+                                                        String jsonReq = gson.toJson(serverRequest);
+                                                        onlineUsr.getOutputWriter().println(jsonReq + "\0");
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                        }
+                                        else {
+                                            //db error(notify client)
+                                        }
                                     }
                                     else {
-                                        //error request
+                                        //error request(chat not found)
                                     }
 
 
@@ -399,7 +440,7 @@ public class Server {
 
     private static String removeNullByte(String str){
         byte[] stringBytes = str.getBytes(StandardCharsets.UTF_8);
-        byte[] noNullByte = new byte[str.length() - 1];
+        byte[] noNullByte = new byte[stringBytes.length - 1];
 
         System.arraycopy(stringBytes,0,noNullByte,0,noNullByte.length);
         return new String(noNullByte, StandardCharsets.UTF_8);
