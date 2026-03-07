@@ -2,7 +2,6 @@ package org.example;
 
 import com.google.gson.*;
 import org.example.fromUser.ClientRequest;
-import org.example.messages.Message;
 import org.example.messages.TextMessage;
 import org.example.toUser.ServerRequest;
 
@@ -131,7 +130,7 @@ public class Server {
 
                         ClientRequest clientRequest = gson.fromJson(jsonRequest, ClientRequest.class);
 
-                        if (clientRequest.getRequestType() == ClientRequest.RequestType.CONNECT){
+                        if (clientRequest.getRequestType() == ClientRequest.Type.CONNECT){
                             User fromUser = clientRequest.getFrom();
 
                             int id = fromUser.getUserID();
@@ -274,10 +273,10 @@ public class Server {
                         }
 
                         JsonObject body = clientRequest.getRequestBody();
-                        ClientRequest.RequestType requestType = clientRequest.getRequestType();
+                        ClientRequest.Type type = clientRequest.getRequestType();
 
                         if (user.getUserID() == userId && user.getUsername().equals(username)){
-                            switch (requestType){
+                            switch (type){
 
                                 case CREATE_CHAT -> {
                                     User withUser = gson.fromJson(gson.toJson(body), User.class);
@@ -332,6 +331,10 @@ public class Server {
                                     //group chat creating
                                 }
 
+                                case MESSAGE_RECEIVED -> {
+                                    //mark target message as delivered(notify sender?)
+                                }
+
                                 case SEND_TEXT_MESSAGE -> {
 
                                     int toChatID = body.get("chat_id").getAsInt();
@@ -349,35 +352,25 @@ public class Server {
                                         boolean isSuccess = DatabaseHandler.addMessage(textMessage);
 
                                         if (isSuccess){
-                                            User receiver = null;
-                                            for (User usr : toChat.getUsers()){
-                                                if (usr.getUserID() != fromUser.getUserID()){
-                                                    receiver = usr;
+                                            int receiverId = 0;
+                                            for (int usrId : toChat.getUsers()){
+                                                if (usrId != fromUser.getUserID()){
+                                                    receiverId = usrId;
                                                     break;
                                                 }
                                             }
 
-                                            if (receiver != null){
+                                            if (receiverId != 0){
                                                 for (User usr : onlineUsers){
-                                                    if (usr.getUserID() == receiver.getUserID()){
-
-
-                                                        User onlineUsr = null;
-                                                        for (User usrr : onlineUsers){
-                                                            if (usrr.getUserID() == usr.getUserID()){
-                                                                onlineUsr = usrr;
-                                                            }
-                                                        }
-
-                                                        assert onlineUsr != null;
+                                                    if (usr.getUserID() == receiverId){
                                                         ServerRequest serverRequest = new ServerRequest(
-                                                                onlineUsr.getClient().getInetAddress(),
-                                                                onlineUsr,
+                                                                usr.getClient().getInetAddress(),
+                                                                usr,
                                                                 ServerRequest.Type.RECEIVE_MESSAGE,
                                                                 textMessage
                                                         );
                                                         String jsonReq = gson.toJson(serverRequest);
-                                                        onlineUsr.getOutputWriter().println(jsonReq + "\0");
+                                                        usr.getOutputWriter().println(jsonReq + "\0");
                                                         break;
                                                     }
                                                 }
@@ -385,13 +378,40 @@ public class Server {
 
                                         }
                                         else {
-                                            //db error(notify client)
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    client.getInetAddress(),
+                                                    user,
+                                                    ServerRequest.Type.ERROR,
+                                                    Error.DATABASE_ERROR
+                                            );
+                                            output.println(gson.toJson(serverRequest) + "\0");
+
+                                            JsonElement el = gson.fromJson(request,JsonElement.class);
+                                            String formattedUser = String.format("%s(userID: %d)",username,userId);
+                                            System.out.printf(
+                                                    ERROR_OCCURRED,
+                                                    "handle request from user " + formattedUser + "(Database error)"
+                                            );
                                         }
                                     }
                                     else {
-                                        //error request(chat not found)
-                                    }
+                                        ServerRequest serverRequest = new ServerRequest(
+                                                ip,
+                                                user,
+                                                ServerRequest.Type.ERROR,
+                                                Error.CHAT_NOT_FOUND
+                                        );
+                                        output.println(gson.toJson(serverRequest) + "\0");
 
+                                        JsonElement el = gson.fromJson(request, JsonElement.class);
+                                        System.out.printf(
+                                                INVALID_REQUEST,
+                                                username,
+                                                userId,
+                                                ip.toString(),
+                                                gson.toJson(el) + "\n(Chat not found)"
+                                        );
+                                    }
 
                                 }
                             }

@@ -8,30 +8,30 @@ public class Chat implements Serializable {
     @SerializedName("chat_id")
     private int chatID;
     @SerializedName("user_1")
-    private User user1;
+    private int user1ID;
     @SerializedName("user_2")
-    private User user2;
+    private int user2ID;
 
-    public Chat(int chatID, User user1, User user2) {
+    public Chat(int chatID, int user1ID, int user2ID) {
         this.chatID = chatID;
-        this.user1 = user1;
-        this.user2 = user2;
+        this.user1ID = user1ID;
+        this.user2ID = user2ID;
     }
 
     public int getChatID() {
         return chatID;
     }
 
-    public User getUser1() {
-        return user1;
+    public int getUser1ID() {
+        return user1ID;
     }
 
-    public User getUser2() {
-        return user2;
+    public int getUser2ID() {
+        return user2ID;
     }
 
     //Array from 2 elements
-    public User[] getUsers(){
-        return new User[]{user1, user2};
+    public int[] getUsers(){
+        return new int[]{user1ID, user2ID};
     }
 }

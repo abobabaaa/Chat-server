@@ -23,7 +23,7 @@ public class DatabaseHandler {
     private static final String WARNING_TEMPLATE =
             ConsoleColor.YELLOW +
             "[DATABASE]: WARNING! %s while trying to %s\n(%s)" +
-            ConsoleColor.RESET_COLOR;
+            ConsoleColor.RESET_COLOR + "\n";
 
     public static Connection getConnection(){
         try {
@@ -167,7 +167,7 @@ public class DatabaseHandler {
                 }
 
                 if (user1 != null && user2 != null){
-                    chats.add(new Chat(chatID,user1,user2));
+                    chats.add(new Chat(chatID,user1ID,user2ID));
                 }
                 else {
                     System.out.printf(
@@ -232,7 +232,7 @@ public class DatabaseHandler {
                 ResultSet resultSet = prstmt.executeQuery();
                 if (resultSet.next()){
                     int chatId = resultSet.getInt("id");
-                    return new Chat(chatId,user1,user2);
+                    return new Chat(chatId,user1Id,user2Id);
                 }
                 System.out.println("[DATABASE]: Chat wasn't created for some reasons(DatabaseHandler:166)");
                 return null;

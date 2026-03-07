@@ -10,6 +10,7 @@ import java.lang.reflect.Type;
 public enum Error {
     BAD_REQUEST(401, "Bad request"),
     USER_NOT_FOUND(402, "User not found"),
+    CHAT_NOT_FOUND(403,"Chat not found"),
     DATABASE_ERROR(501,"Database error");
 
     private int code;

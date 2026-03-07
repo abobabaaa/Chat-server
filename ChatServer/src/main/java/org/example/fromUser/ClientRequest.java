@@ -8,13 +8,13 @@ public class ClientRequest {
     @SerializedName("from_user")
     private User fromUser;
     @SerializedName("request_type")
-    private RequestType requestType;
+    private Type type;
     @SerializedName("request_body")
     private JsonObject requestBody;
 
-    public ClientRequest(User fromUser, RequestType requestType, JsonObject requestBody) {
+    public ClientRequest(User fromUser, Type type, JsonObject requestBody) {
         this.fromUser = fromUser;
-        this.requestType = requestType;
+        this.type = type;
         this.requestBody = requestBody;
     }
 
@@ -22,15 +22,15 @@ public class ClientRequest {
         return fromUser;
     }
 
-    public RequestType getRequestType() {
-        return requestType;
+    public Type getRequestType() {
+        return type;
     }
 
     public JsonObject getRequestBody() {
         return requestBody;
     }
 
-    public enum RequestType{
-        CREATE_CHAT, CREATE_GROUP_CHAT, SEND_TEXT_MESSAGE, CONNECT
+    public enum Type {
+        CREATE_CHAT, CREATE_GROUP_CHAT, SEND_TEXT_MESSAGE, CONNECT, MESSAGE_RECEIVED
     }
 }
