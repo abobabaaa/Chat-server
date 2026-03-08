@@ -41,7 +41,8 @@ public class DatabaseHandler {
                 create table if not exists users(
                     id int primary key auto_increment,
                     username varchar(64) not null unique,
-                    password varchar(256) not null
+                    password varchar(256) not null,
+                    last_online timestamp
                 )
                 """;
 
@@ -76,6 +77,7 @@ public class DatabaseHandler {
                     from_user_id int not null,
                     text varchar(256) not null,
                     delivered boolean not null default false,
+                    viewed_date timestamp,
                     date timestamp default current_timestamp
                 )
                 """;
@@ -205,6 +207,45 @@ public class DatabaseHandler {
         }
     }
 
+    public static boolean setLastUserOnline(User user, Timestamp datetime){
+        Connection conn = getConnection();
+        int userID = user.getUserID();
+        String username = user.getUsername();
+
+        try {
+            PreparedStatement prstmt = conn.prepareStatement("update users set last_online = ? where id = ? and username = ?");
+            if (datetime == null){
+                prstmt.setNull(1,Types.TIMESTAMP);
+            }
+            else {
+                prstmt.setTimestamp(1,datetime);
+            }
+            prstmt.setInt(2,userID);
+            prstmt.setString(3,username);
+            int rows = prstmt.executeUpdate();
+
+            if (rows > 0)
+                return true;
+            else {
+                System.out.printf(
+                        WARNING_TEMPLATE,
+                        "Update query returned 0",
+                        "update last online datetime",
+                        "setLastUserOnline method"
+                );
+                return false;
+            }
+        }
+        catch (SQLException e){
+            System.out.printf(
+                    ERROR_TEMPLATE,
+                    "update last online datetime",
+                    e.getMessage()
+            );
+            return false;
+        }
+    }
+
     public static Chat createChat(User user1, User user2){
         Connection connection = getConnection();
         try {
@@ -326,6 +367,105 @@ public class DatabaseHandler {
         return false;
     }
 
+    /**
+     * Marks message with a specified messageID as delivered
+     * @param messageID {@code messageID} of message that will be marked as delivered
+     * @return {@code userID} of message sender or 0 if something went wrong
+     */
+    public static int markMessageAsDelivered(int messageID){
+        Connection conn = getConnection();
+        try {
+            PreparedStatement prstmt = conn.prepareStatement("update messages set delivered = true where id = ?");
+            prstmt.setInt(1,messageID);
+            int rows = prstmt.executeUpdate();
+            if (rows > 0){
+                prstmt = conn.prepareStatement("select from_user_id from messages where id = ?");
+                prstmt.setInt(1,messageID);
+                ResultSet resultSet = prstmt.executeQuery();
+                if (resultSet.next()){
+                    return resultSet.getInt(1);
+                }
+                else {
+                    System.out.printf(
+                            WARNING_TEMPLATE,
+                            "Selection result returned nothing(expected userID)",
+                            "select sender userID from messages table",
+                            "markMessageAsDelivered method"
+                    );
+                    return 0;
+                }
+            }
+            else {
+                System.out.printf(
+                        WARNING_TEMPLATE,
+                        "Data update failed",
+                        "update field in the messages table",
+                        "markMessageAsDelivered method"
+                );
+                return 0;
+            }
+        }
+        catch (SQLException e){
+            System.out.printf(
+                    ERROR_TEMPLATE,
+                    "mark message as delivered",
+                    e.getMessage()
+            );
+            return 0;
+        }
+    }
+
+    /**
+     * Marks message with a specified messageID as viewed(inserts view date in the database)
+     * @param messageID of a message to be marked as viewed
+     * @return sender {@code userID} or 0 if something went wrong
+     */
+    public static int markMessageAsViewed(int messageID) {
+        Connection conn = getConnection();
+        try {
+            PreparedStatement prstmt = conn.prepareStatement("update messages set viewed_date = ? where id = ?");
+            Timestamp viewDatetime = new Timestamp(System.currentTimeMillis());
+            prstmt.setTimestamp(1,viewDatetime);
+            prstmt.setInt(2,messageID);
+
+            int rows = prstmt.executeUpdate();
+            if (rows > 0){
+                prstmt = conn.prepareStatement("select from_user_id from messages where id = ?");
+                prstmt.setInt(1,messageID);
+                ResultSet resultSet = prstmt.executeQuery();
+                if (resultSet.next()){
+                    return resultSet.getInt(1);
+                }
+                else {
+                    System.out.printf(
+                            WARNING_TEMPLATE,
+                            "Selection result returned nothing(expected userID)",
+                            "select sender userID from messages table",
+                            "markMessageAsViewed method"
+                    );
+                    return 0;
+                }
+            }
+            else {
+                System.out.printf(
+                        WARNING_TEMPLATE,
+                        "Data update failed",
+                        "update field in the messages table",
+                        "markMessageAsViewed method"
+                );
+                return 0;
+            }
+        }
+        catch (SQLException e){
+            System.out.printf(
+                    ERROR_TEMPLATE,
+                    "mark message as viewed",
+                    e.getMessage()
+            );
+            return 0;
+        }
+    }
+
     @NotNull
     private static LocalDateTime getLocalDateTime(Timestamp timestamp) {
         Date date = new Date(timestamp.getTime());
@@ -341,4 +481,6 @@ public class DatabaseHandler {
 
         return LocalDateTime.of(year,month,day,hour,minute);
     }
+
+
 }

@@ -3,7 +3,6 @@ package org.example.toUser;
 import com.google.gson.annotations.SerializedName;
 import org.example.User;
 
-import java.io.Serializable;
 import java.net.InetAddress;
 
 public class ServerRequest {
@@ -40,6 +39,6 @@ public class ServerRequest {
     }
 
     public enum Type{
-        ERROR, SUCCESSFUL_CONNECTION, CHAT_CREATED, RECEIVE_MESSAGE
+        ERROR, SUCCESSFUL_CONNECTION, CHAT_CREATED, RECEIVE_MESSAGE, MESSAGE_DELIVERED, MESSAGE_VIEWED
     }
 }

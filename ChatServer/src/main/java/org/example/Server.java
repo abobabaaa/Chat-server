@@ -332,7 +332,78 @@ public class Server {
                                 }
 
                                 case MESSAGE_RECEIVED -> {
-                                    //mark target message as delivered(notify sender?)
+                                    int messageID = body.get("message_id").getAsInt();
+                                    int senderUserID = DatabaseHandler.markMessageAsDelivered(messageID);
+
+                                    if (senderUserID != 0){
+                                        User sender = getOnlineUserByID(senderUserID);
+
+                                        if (sender != null){
+                                            JsonObject jsonObject = new JsonObject();
+                                            jsonObject.addProperty("message_id",messageID);
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    sender.getClient().getInetAddress(),
+                                                    sender,
+                                                    ServerRequest.Type.MESSAGE_DELIVERED,
+                                                    jsonObject
+                                            );
+                                            sender.getOutputWriter().println(gson.toJson(serverRequest) + "\0");
+                                        }
+                                    }
+                                    else {
+                                        ServerRequest serverRequest = new ServerRequest(
+                                                ip,
+                                                fromUser,
+                                                ServerRequest.Type.ERROR,
+                                                Error.USER_NOT_FOUND
+                                        );
+                                        output.println(gson.toJson(serverRequest) + "\0");
+                                        System.out.printf(
+                                                INVALID_REQUEST,
+                                                username,
+                                                userId,
+                                                ip.toString(),
+                                                "sender of message with messageID " + messageID + " not found"
+                                        );
+                                    }
+                                }
+
+                                case MESSAGE_VIEWED -> {
+                                    int messageID = body.get("message_id").getAsInt();
+                                    int senderUserID = DatabaseHandler.markMessageAsViewed(messageID);
+
+                                    if (senderUserID != 0){
+                                        User sender = getOnlineUserByID(senderUserID);
+
+                                        if (sender != null){
+                                            JsonObject jsonObject = new JsonObject();
+                                            jsonObject.addProperty("message_id",messageID);
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    sender.getClient().getInetAddress(),
+                                                    sender,
+                                                    ServerRequest.Type.MESSAGE_VIEWED,
+                                                    jsonObject
+                                            );
+                                            sender.getOutputWriter().println(gson.toJson(serverRequest + "\0"));
+                                        }
+                                    }
+                                    else {
+                                        ServerRequest serverRequest = new ServerRequest(
+                                                ip,
+                                                fromUser,
+                                                ServerRequest.Type.ERROR,
+                                                Error.USER_NOT_FOUND
+                                        );
+                                        output.println(gson.toJson(serverRequest) + "\0");
+                                        System.out.printf(
+                                                INVALID_REQUEST,
+                                                username,
+                                                userId,
+                                                ip.toString(),
+                                                "sender of message with messageID " + messageID +
+                                                " not found. Cannot send message viewing confirmation"
+                                        );
+                                    }
                                 }
 
                                 case SEND_TEXT_MESSAGE -> {
@@ -375,7 +446,6 @@ public class Server {
                                                     }
                                                 }
                                             }
-
                                         }
                                         else {
                                             ServerRequest serverRequest = new ServerRequest(
@@ -386,7 +456,6 @@ public class Server {
                                             );
                                             output.println(gson.toJson(serverRequest) + "\0");
 
-                                            JsonElement el = gson.fromJson(request,JsonElement.class);
                                             String formattedUser = String.format("%s(userID: %d)",username,userId);
                                             System.out.printf(
                                                     ERROR_OCCURRED,
@@ -464,5 +533,13 @@ public class Server {
 
         System.arraycopy(stringBytes,0,noNullByte,0,noNullByte.length);
         return new String(noNullByte, StandardCharsets.UTF_8);
+    }
+
+    private static User getOnlineUserByID(int userID){
+        for (User user : onlineUsers){
+            if (user.getUserID() == userID)
+                return user;
+        }
+        return null;
     }
 }
