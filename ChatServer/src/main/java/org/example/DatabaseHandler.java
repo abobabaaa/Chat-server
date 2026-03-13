@@ -11,9 +11,9 @@ import java.util.Date;
 import java.util.List;
 
 public class DatabaseHandler {
-    private static final String url = "DB_URL";
-    private static final String username = "DB_USERNAME";
-    private static final String password = "DB_PASSWORD";
+    private static final String url = "jdbc:mysql://localhost:3306/zakhargram";
+    private static final String username = "admin";
+    private static final String password = "143568Abc@_?><Gh!~";
 
     private static final String ERROR_TEMPLATE =
             ConsoleColor.RED +
@@ -76,6 +76,7 @@ public class DatabaseHandler {
                     chat_id int not null,
                     from_user_id int not null,
                     text varchar(256) not null,
+                    constraint chk_is_text_empty check(trim(text) != ''),
                     delivered boolean not null default false,
                     viewed_date timestamp,
                     date timestamp default current_timestamp
@@ -418,34 +419,42 @@ public class DatabaseHandler {
     /**
      * Marks message with a specified messageID as viewed(inserts view date in the database)
      * @param messageID of a message to be marked as viewed
-     * @return sender {@code userID} or 0 if something went wrong
+     * @param requestSenderUserID userID of user, whose client tries to view message
+     * @return sender {@code userID} if everything ok
+     * <p>0 if something went wrong</p>
+     * <p>-1 if client attempted to view message sent by himself</p>
+     *
      */
-    public static int markMessageAsViewed(int messageID) {
+    public static int markMessageAsViewed(int messageID, int requestSenderUserID) {
         Connection conn = getConnection();
         try {
-            PreparedStatement prstmt = conn.prepareStatement("update messages set viewed_date = ? where id = ?");
+            PreparedStatement prstmt = conn.prepareStatement("select from_user_id from messages where id = ?");
+            prstmt.setInt(1,messageID);
+            ResultSet fromUserSelection = prstmt.executeQuery();
+
+            if (fromUserSelection.next()){
+                int msgSenderUserID = fromUserSelection.getInt(1);
+                if (msgSenderUserID == requestSenderUserID)
+                    return -1;
+            }
+            else {
+                System.out.printf(
+                        WARNING_TEMPLATE,
+                        "Selection query returned nothing(expected userID)",
+                        "select sender userID from messages table",
+                        "markMessageAsViewed method"
+                );
+                return 0;
+            }
+
+            prstmt = conn.prepareStatement("update messages set viewed_date = ? where id = ?");
             Timestamp viewDatetime = new Timestamp(System.currentTimeMillis());
             prstmt.setTimestamp(1,viewDatetime);
             prstmt.setInt(2,messageID);
 
             int rows = prstmt.executeUpdate();
-            if (rows > 0){
-                prstmt = conn.prepareStatement("select from_user_id from messages where id = ?");
-                prstmt.setInt(1,messageID);
-                ResultSet resultSet = prstmt.executeQuery();
-                if (resultSet.next()){
-                    return resultSet.getInt(1);
-                }
-                else {
-                    System.out.printf(
-                            WARNING_TEMPLATE,
-                            "Selection result returned nothing(expected userID)",
-                            "select sender userID from messages table",
-                            "markMessageAsViewed method"
-                    );
-                    return 0;
-                }
-            }
+            if (rows > 0)
+                return fromUserSelection.getInt(1);
             else {
                 System.out.printf(
                         WARNING_TEMPLATE,
@@ -481,6 +490,4 @@ public class DatabaseHandler {
 
         return LocalDateTime.of(year,month,day,hour,minute);
     }
-
-
 }

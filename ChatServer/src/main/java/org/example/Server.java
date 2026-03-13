@@ -370,9 +370,35 @@ public class Server {
 
                                 case MESSAGE_VIEWED -> {
                                     int messageID = body.get("message_id").getAsInt();
-                                    int senderUserID = DatabaseHandler.markMessageAsViewed(messageID);
+                                    int senderUserID = DatabaseHandler.markMessageAsViewed(messageID, fromUser.getUserID());
 
-                                    if (senderUserID != 0){
+                                    if (senderUserID == 0){
+                                        ServerRequest serverRequest = new ServerRequest(
+                                                ip,
+                                                fromUser,
+                                                ServerRequest.Type.ERROR,
+                                                Error.USER_NOT_FOUND
+                                        );
+                                        output.println(gson.toJson(serverRequest) + "\0");
+
+                                    }
+                                    else if (senderUserID == -1) {
+                                        ServerRequest serverRequest = new ServerRequest(
+                                                ip,
+                                                fromUser,
+                                                ServerRequest.Type.ERROR,
+                                                Error.SELF_MESSAGE_VIEW
+                                        );
+                                        output.println(gson.toJson(serverRequest) + "\0");
+                                        System.out.printf(
+                                                INVALID_REQUEST,
+                                                username,
+                                                userId,
+                                                ip,
+                                                "client attempted to mark message sent by himself as viewed"
+                                        );
+                                    }
+                                    else {
                                         User sender = getOnlineUserByID(senderUserID);
 
                                         if (sender != null){
@@ -384,32 +410,33 @@ public class Server {
                                                     ServerRequest.Type.MESSAGE_VIEWED,
                                                     jsonObject
                                             );
-                                            sender.getOutputWriter().println(gson.toJson(serverRequest + "\0"));
+                                            sender.getOutputWriter().println(gson.toJson(serverRequest) + "\0");
                                         }
-                                    }
-                                    else {
-                                        ServerRequest serverRequest = new ServerRequest(
-                                                ip,
-                                                fromUser,
-                                                ServerRequest.Type.ERROR,
-                                                Error.USER_NOT_FOUND
-                                        );
-                                        output.println(gson.toJson(serverRequest) + "\0");
-                                        System.out.printf(
-                                                INVALID_REQUEST,
-                                                username,
-                                                userId,
-                                                ip.toString(),
-                                                "sender of message with messageID " + messageID +
-                                                " not found. Cannot send message viewing confirmation"
-                                        );
                                     }
                                 }
 
                                 case SEND_TEXT_MESSAGE -> {
 
                                     int toChatID = body.get("chat_id").getAsInt();
-                                    String msgText = body.get("text").getAsString();
+                                    String msgText = body.get("text").getAsString().trim();
+
+                                    if (msgText.isEmpty()){
+                                        ServerRequest serverRequest = new ServerRequest(
+                                                ip,
+                                                fromUser,
+                                                ServerRequest.Type.ERROR,
+                                                Error.EMPTY_TEXT_MESSAGE
+                                        );
+                                        output.println(gson.toJson(serverRequest) + "\0");
+                                        System.out.printf(
+                                                INVALID_REQUEST,
+                                                username,
+                                                userId,
+                                                ip,
+                                                "client attempted to send an empty text message"
+                                        );
+                                        break;
+                                    }
 
                                     Chat toChat = null;
                                     for (Chat chat : allChats){
