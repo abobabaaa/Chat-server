@@ -26,11 +26,17 @@ public class Server {
     private static List<User> allUsers = Collections.synchronizedList(new ArrayList<>());
     private static List<Chat> allChats = Collections.synchronizedList(new ArrayList<>());
 
-    private static final String CLIENT_CONNECTED = "Client connected! ip: %s\n";
+    private static final Gson gson = new GsonBuilder()
+            .registerTypeAdapter(Error.class, new Error.ErrorSerializer())
+            .registerTypeAdapter(TextMessage.class, new TextMessage.Serializer())
+            .setPrettyPrinting()
+            .create();
+
+    private static final String CONNECTION_REQUEST = "Connection request received, ip: %s\n";
 
     private static final String CLIENT_RECOGNIZED =
             ConsoleColor.GREEN +
-            "Client with ip %s recognized as %s(userID: %d)!" +
+            "Client with ip %s successfully connected and recognized as %s(userID: %d)!" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String INVALID_REQUEST =
@@ -38,9 +44,9 @@ public class Server {
             "Invalid request from user %s(userID: %d, ip: %s):\n%s" +
             ConsoleColor.RESET_COLOR + "\n";
 
-    private static final String CLIENT_DISCONNECTED_BY_SERVER =
+    private static final String CONNECTION_REQUEST_DECLINED =
             ConsoleColor.RED +
-            "Client with ip %s disconnected by server: %s" +
+            "Connection request from ip %s declined by server: %s" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String USER_DISCONNECTED_BY_SERVER =
@@ -88,13 +94,42 @@ public class Server {
 
             while (true){
                 Socket client = serverSocket.accept();
-                System.out.printf(CLIENT_CONNECTED,client.getInetAddress().toString());
+                System.out.printf(CONNECTION_REQUEST,client.getInetAddress().toString());
 
                 new Thread(()->{
-                    User user = recognizeUser(client);
+                    InetAddress ip = client.getInetAddress();
+                    boolean isAlreadyConnected = checkConnection(ip);
+                    if (!isAlreadyConnected){
+                        User user = recognizeUser(client);
 
-                    if (user != null){
-                        handleClient(user);
+                        if (user != null){
+                            handleClient(user);
+                        }
+                    }
+                    else {
+                        try (PrintWriter out = new PrintWriter(client.getOutputStream(),true)){
+                            ServerRequest serverRequest = new ServerRequest(
+                                    client.getInetAddress(),
+                                    null,
+                                    ServerRequest.Type.ERROR,
+                                    Error.DUPLICATED_CONNECTION
+                            );
+                            out.println(gson.toJson(serverRequest) + "\0");
+                            client.close();
+                            client.getInputStream().close();
+                            client.getOutputStream().close();
+                            System.out.printf(
+                                    CONNECTION_REQUEST_DECLINED,
+                                    ip,
+                                    "client with this ip is already connected to the server"
+                            );
+                        }
+                        catch (IOException e){
+                            System.out.printf(
+                                    ERROR_OCCURRED,
+                                    "disconnect client with ip " + client.getInetAddress().toString()
+                            );
+                        }
                     }
                 }).start();
             }
@@ -168,7 +203,7 @@ public class Server {
                                 out.println(gson.toJson(serverRequest) + "\0");
 
                                 client.close();
-                                System.out.printf(CLIENT_DISCONNECTED_BY_SERVER,
+                                System.out.printf(CONNECTION_REQUEST_DECLINED,
                                         client.getInetAddress(),
                                         String.format("User %s(userID: %d) not found",username,id)
                                 );
@@ -190,7 +225,7 @@ public class Server {
                             JsonElement el = JsonParser.parseString(json.toString());
                             json = new StringBuilder(gson.toJson(el));
 
-                            System.out.printf(CLIENT_DISCONNECTED_BY_SERVER,
+                            System.out.printf(CONNECTION_REQUEST_DECLINED,
                                     client.getInetAddress(),
                                     "invalid connection request(invalid request type for connection):\n" + json
                             );
@@ -208,7 +243,7 @@ public class Server {
                         out.println(gson.toJson(serverRequest) + "\0");
 
                         client.close();
-                        System.out.printf(CLIENT_DISCONNECTED_BY_SERVER,
+                        System.out.printf(CONNECTION_REQUEST_DECLINED,
                                 client.getInetAddress(),
                                 "invalid connection request(invalid JSON syntax):\n" + json + "\n" + e.getMessage());
                         return null;
@@ -224,11 +259,7 @@ public class Server {
 
     private static void handleClient(User user) {
         onlineUsers.add(user);
-        Gson gson = new GsonBuilder()
-                .registerTypeAdapter(Error.class, new Error.ErrorSerializer())
-                .registerTypeAdapter(TextMessage.class, new TextMessage.Serializer())
-                .setPrettyPrinting()
-                .create();
+
         try (
                 BufferedReader input = user.getInputReader();
                 PrintWriter output = user.getOutputWriter();
@@ -568,5 +599,21 @@ public class Server {
                 return user;
         }
         return null;
+    }
+
+    /**
+     * Checks is client with the specified ip already connected to the server
+     * @param ip ip address to check
+     * @return {@code true} if client with this ip is already connected or
+     *  <p>{@code false} otherwise</p>
+     */
+    private static boolean checkConnection(InetAddress ip){
+        String ipStr = ip.toString();
+        for (User user : onlineUsers){
+            String bufIp = user.getClient().getInetAddress().toString();
+            if (ipStr.equals(bufIp))
+                return true;
+        }
+        return false;
     }
 }

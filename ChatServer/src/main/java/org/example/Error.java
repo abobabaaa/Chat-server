@@ -11,6 +11,7 @@ public enum Error {
     BAD_REQUEST(401, "Bad request"),
     USER_NOT_FOUND(402, "User not found"),
     CHAT_NOT_FOUND(403,"Chat not found"),
+    DUPLICATED_CONNECTION(404,"Client with this ip is already connected"),
     DATABASE_ERROR(501,"Database error"),
     SELF_MESSAGE_VIEW(601,"Message cannot marked as viewed by its sender"),
     EMPTY_TEXT_MESSAGE(602,"Text message is empty");
