@@ -5,20 +5,24 @@ import org.example.fromUser.ClientRequest;
 import org.example.messages.TextMessage;
 import org.example.toUser.ServerRequest;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import javax.net.ssl.*;
+import java.io.*;
 import java.net.InetAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.*;
+import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 public class Server {
     private static final int PORT = 2865;
+    private static final String KEY_STORE_PASSWORD = "KEY_STORE_PASSWORD";
+    private static final String KEY_STORE_PATH = "KEY_STORE_PATH";
+    private static final String KEY_STORE_TYPE = "KEY_STORE_TYPE";
+    private static final String KEY_MANAGER_ALGORITHM = "KEY_MANAGER_ALGORITHM";
+    private static final String ENCRYPTION_ALGORITHM = "ENCRYPTION_ALGORITHM";
 
     public static final String SERVER_DATETIME_FORMAT = "dd-MM-yyyy|hh:mm";
 
@@ -70,10 +74,16 @@ public class Server {
 
     static void main() {
         System.out.println("Starting server...");
-        try (ServerSocket serverSocket = new ServerSocket(PORT)){
-            //TODO: Скачивать данные с базы данных и загружать их в память сервера
+        System.out.println("Initializing secure server socket...");
+        try (SSLServerSocket serverSocket = initSecureServerSocket()){
+            if (serverSocket == null){
+                System.out.printf(RED_MESSAGE, "Secure socket initialization failed!");
+                return;
+            }
+            System.out.printf(GREEN_MESSAGE, "Secure server socket successfully initialized!");
+
             System.out.println("Initializing database...");
-            boolean isInitialized = DatabaseHandler.initDatabase(); //&& downloadDataFromDatabase();
+            boolean isInitialized = DatabaseHandler.initDatabase();
             if (!isInitialized){
                 System.out.printf(RED_MESSAGE, "Database initialization failed!");
                 System.out.printf(RED_MESSAGE, "Disabling server due to database initialization failure...");
@@ -90,21 +100,18 @@ public class Server {
             }
             System.out.printf(GREEN_MESSAGE, "Successfully downloaded data from the database!");
 
-            System.out.println("Server started at port " + PORT);
+            System.out.printf(GREEN_MESSAGE, "Server started at port " + PORT);
 
             while (true){
-                Socket client = serverSocket.accept();
+                SSLSocket client = (SSLSocket) serverSocket.accept();
                 System.out.printf(CONNECTION_REQUEST,client.getInetAddress().toString());
 
                 new Thread(()->{
                     InetAddress ip = client.getInetAddress();
-                    boolean isAlreadyConnected = checkConnection(ip);
-                    if (!isAlreadyConnected){
-                        User user = recognizeUser(client);
+                    User user = recognizeUser(client);
 
-                        if (user != null){
-                            handleClient(user);
-                        }
+                    if (user != null){
+                        handleClient(user);
                     }
                     else {
                         try (PrintWriter out = new PrintWriter(client.getOutputStream(),true)){
@@ -127,7 +134,7 @@ public class Server {
                         catch (IOException e){
                             System.out.printf(
                                     ERROR_OCCURRED,
-                                    "disconnect client with ip " + client.getInetAddress().toString()
+                                    "disconnect client with ip " + client.getInetAddress().toString() + ": " + e.getMessage()
                             );
                         }
                     }
@@ -136,6 +143,35 @@ public class Server {
         }
         catch (IOException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Initializes secure server socket to handle clients with encryption algorithms
+     * @return {@link SSLServerSocket} instance or {@code null} if something went wrong
+     */
+    private static SSLServerSocket initSecureServerSocket(){
+        try (FileInputStream fileInput = new FileInputStream(KEY_STORE_PATH)){
+            KeyStore keyStore = KeyStore.getInstance(KEY_STORE_TYPE);
+            keyStore.load(fileInput,KEY_STORE_PASSWORD.toCharArray());
+
+            KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KEY_MANAGER_ALGORITHM);
+            keyManagerFactory.init(keyStore,KEY_STORE_PASSWORD.toCharArray());
+
+            SSLContext context = SSLContext.getInstance(ENCRYPTION_ALGORITHM);
+            context.init(keyManagerFactory.getKeyManagers(),null,null);
+
+            SSLServerSocketFactory factory = context.getServerSocketFactory();
+            return (SSLServerSocket) factory.createServerSocket(PORT);
+        }
+        catch (KeyStoreException | NoSuchAlgorithmException |
+               UnrecoverableKeyException | KeyManagementException |
+               IOException | CertificateException e) {
+            System.out.printf(
+                    ERROR_OCCURRED,
+                    "initialize secure server socket: " + e.getMessage()
+            );
+            return null;
         }
     }
 
@@ -605,6 +641,7 @@ public class Server {
      * Checks is client with the specified ip already connected to the server
      * @param ip ip address to check
      * @return {@code true} if client with this ip is already connected or
+     * @deprecated Requires changes
      *  <p>{@code false} otherwise</p>
      */
     private static boolean checkConnection(InetAddress ip){
