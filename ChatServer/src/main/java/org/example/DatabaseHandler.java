@@ -3,6 +3,7 @@ package org.example;
 import org.example.messages.Message;
 import org.example.messages.TextMessage;
 import org.jetbrains.annotations.NotNull;
+import org.mindrot.jbcrypt.BCrypt;
 
 import java.sql.*;
 import java.time.LocalDateTime;
@@ -11,9 +12,9 @@ import java.util.Date;
 import java.util.List;
 
 public class DatabaseHandler {
-    private static final String url = "jdbc:mysql://localhost:3306/zakhargram";
-    private static final String username = "admin";
-    private static final String password = "143568Abc@_?><Gh!~";
+    private static final String url = "DB_URL";
+    private static final String username = "DB_USERNAME";
+    private static final String password = "DB_PASSWORD";
 
     private static final String ERROR_TEMPLATE =
             ConsoleColor.RED +
@@ -208,7 +209,44 @@ public class DatabaseHandler {
         }
     }
 
-    public static boolean setLastUserOnline(User user, Timestamp datetime){
+    public static AuthorizationResult authorizeUser(String username, String password){
+        String selectUser = "select * from users where username = ?";
+        Connection connection = getConnection();
+
+        try {
+            PreparedStatement prstmt = connection.prepareStatement(selectUser);
+            prstmt.setString(1, username);
+            ResultSet resultSet = prstmt.executeQuery();
+
+            if (resultSet.next()){
+                String hashedPassword = resultSet.getString("password");
+
+                if (BCrypt.checkpw(password,hashedPassword)){
+                    int userID = resultSet.getInt("id");
+                    User user = new User(userID,username);
+                    return new AuthorizationResult(true,user,null);
+                }
+                else {
+                    return new AuthorizationResult(false,null,Error.AUTH_INCORRECT_PASSWORD);
+                }
+            }
+            else {
+                System.out.printf(WARNING_TEMPLATE,
+                        "Selection query returned nothing(expected user)",
+                        "authorize user",
+                        "user with username " + username + " not found"
+                );
+                return new AuthorizationResult(false,null,Error.AUTH_USER_NOT_FOUND);
+            }
+        }
+        catch (SQLException e){
+            System.out.printf(ERROR_TEMPLATE,"authorize user",e.getMessage());
+            e.printStackTrace();
+            return new AuthorizationResult(false,null,Error.DATABASE_ERROR);
+        }
+    }
+
+    public static void setLastUserOnline(User user, Long datetime){
         Connection conn = getConnection();
         int userID = user.getUserID();
         String username = user.getUsername();
@@ -219,22 +257,19 @@ public class DatabaseHandler {
                 prstmt.setNull(1,Types.TIMESTAMP);
             }
             else {
-                prstmt.setTimestamp(1,datetime);
+                prstmt.setTimestamp(1,new Timestamp(datetime));
             }
             prstmt.setInt(2,userID);
             prstmt.setString(3,username);
             int rows = prstmt.executeUpdate();
 
-            if (rows > 0)
-                return true;
-            else {
+            if (rows < 0){
                 System.out.printf(
                         WARNING_TEMPLATE,
                         "Update query returned 0",
                         "update last online datetime",
                         "setLastUserOnline method"
                 );
-                return false;
             }
         }
         catch (SQLException e){
@@ -243,7 +278,6 @@ public class DatabaseHandler {
                     "update last online datetime",
                     e.getMessage()
             );
-            return false;
         }
     }
 

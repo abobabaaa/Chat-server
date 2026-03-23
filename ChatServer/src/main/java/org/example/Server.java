@@ -12,17 +12,18 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.cert.CertificateException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 public class Server {
     private static final int PORT = 2865;
-    private static final String KEY_STORE_PASSWORD = "KEY_STORE_PASSWORD";
-    private static final String KEY_STORE_PATH = "KEY_STORE_PATH";
-    private static final String KEY_STORE_TYPE = "KEY_STORE_TYPE";
-    private static final String KEY_MANAGER_ALGORITHM = "KEY_MANAGER_ALGORITHM";
-    private static final String ENCRYPTION_ALGORITHM = "ENCRYPTION_ALGORITHM";
+    private static final String KEY_STORE_PASSWORD = "12345_Ab";
+    private static final String KEY_STORE_PATH = "C:\\Users\\jagua\\Desktop\\Chat-server\\ChatServer\\src\\main\\java\\org\\example\\keystore\\keystore.p12";
+    private static final String KEY_STORE_TYPE = "PKCS12";
+    private static final String KEY_MANAGER_ALGORITHM = "SunX509";
+    private static final String ENCRYPTION_ALGORITHM = "TLSv1.3";
 
     public static final String SERVER_DATETIME_FORMAT = "dd-MM-yyyy|hh:mm";
 
@@ -108,42 +109,105 @@ public class Server {
 
                 new Thread(()->{
                     InetAddress ip = client.getInetAddress();
-                    User user = recognizeUser(client);
+                    try {
+                        BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+                        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
 
-                    if (user != null){
-                        handleClient(user);
-                    }
-                    else {
-                        try (PrintWriter out = new PrintWriter(client.getOutputStream(),true)){
-                            ServerRequest serverRequest = new ServerRequest(
-                                    client.getInetAddress(),
-                                    null,
-                                    ServerRequest.Type.ERROR,
-                                    Error.DUPLICATED_CONNECTION
-                            );
-                            out.println(gson.toJson(serverRequest) + "\0");
-                            client.close();
-                            client.getInputStream().close();
-                            client.getOutputStream().close();
-                            System.out.printf(
-                                    CONNECTION_REQUEST_DECLINED,
-                                    ip,
-                                    "client with this ip is already connected to the server"
-                            );
+                        StringBuilder jsonStr = new StringBuilder();
+                        String line;
+                        while ((line = in.readLine()) != null){
+                            jsonStr.append(line);
+
+                            if (line.endsWith("\0")){
+                                String jsonRequest = removeNullByte(jsonStr.toString());
+                                ClientRequest clientRequest = parseCLientRequest(jsonRequest);
+
+                                if (clientRequest == null){
+                                    ServerRequest serverRequest = new ServerRequest(
+                                            ip,
+                                            null,
+                                            ServerRequest.Type.ERROR,
+                                            Error.BAD_REQUEST
+                                    );
+                                    out.println(gson.toJson(serverRequest) + "\0");
+                                    in.close();
+                                    out.close();
+                                    client.close();
+
+                                    System.out.printf(CONNECTION_REQUEST_DECLINED, ip, "Invalid json request");
+                                    break;
+                                }
+
+                                JsonObject body = clientRequest.getRequestBody();
+                                String username = body.get("username").getAsString();
+                                String password = body.get("password").getAsString();
+                                switch (clientRequest.getRequestType()){
+                                    case AUTHORIZE_AND_CONNECT -> {
+                                        AuthorizationResult authResult = authorizeUser(client,username,password);
+
+                                        if (authResult.isSuccess()){
+                                            User user = authResult.user();
+
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    ip,
+                                                    user,
+                                                    ServerRequest.Type.SUCCESSFUL_AUTHORIZATION,
+                                                    null
+                                            );
+                                            out.println(gson.toJson(serverRequest) + "\0");
+
+                                            int userID = user.getUserID();
+                                            System.out.printf(
+                                                    CLIENT_RECOGNIZED,
+                                                    ip,
+                                                    username,
+                                                    userID
+                                            );
+                                            handleClient(authResult.user());
+                                        }
+                                        else {
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    ip,
+                                                    null,
+                                                    ServerRequest.Type.ERROR,
+                                                    authResult.error()
+                                            );
+                                            out.println(gson.toJson(serverRequest) + "\0");
+
+                                            in.close();
+                                            out.close();
+                                            client.close();
+                                            System.out.printf(
+                                                    CONNECTION_REQUEST_DECLINED,
+                                                    ip,"authorization failed. " + authResult.error().getMessage()
+                                            );
+                                        }
+                                    }
+                                    case REGISTER_ACCOUNT -> {
+                                        //registration
+                                    }
+                                }
+                                break;
+                            }
                         }
-                        catch (IOException e){
-                            System.out.printf(
-                                    ERROR_OCCURRED,
-                                    "disconnect client with ip " + client.getInetAddress().toString() + ": " + e.getMessage()
-                            );
+                    }
+                    catch (IOException e){
+                        System.out.printf(ERROR_OCCURRED, "handle connection of client with ip " + ip + ": " + e.getMessage());
+                        try {
+                            client.close();
+                        }
+                        catch (IOException ex) {
+                            throw new RuntimeException(ex);
                         }
                     }
                 }).start();
             }
         }
-        catch (IOException e) {
-            throw new RuntimeException(e);
+        catch (IOException e){
+            System.out.printf(RED_MESSAGE,"An I/O error occurred(server was disabled): " + e.getMessage());
+            e.printStackTrace();
         }
+
     }
 
     /**
@@ -176,125 +240,28 @@ public class Server {
     }
 
 
-    private static User recognizeUser(Socket client) {
-        try {
-            BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-            PrintWriter out = new PrintWriter(client.getOutputStream(),true);
+    private static AuthorizationResult authorizeUser(Socket client, String username, String password) {
+        AuthorizationResult authResult = DatabaseHandler.authorizeUser(username, password);
 
-            Gson gson = new GsonBuilder()
-                    .registerTypeAdapter(Error.class, new Error.ErrorSerializer())
-                    .setPrettyPrinting().create();
+        if (authResult.isSuccess()) {
+            User user = authResult.user();
 
-            StringBuilder json = new StringBuilder();
-            String line;
-
-            while ((line = in.readLine()) != null){
-                json.append(line);
-
-                if (json.toString().endsWith("\0")){
-                    try {
-                        String noNullByte = removeNullByte(json.toString());
-
-                        json = new StringBuilder(noNullByte);
-
-                        String jsonRequest = json.toString();
-
-                        ClientRequest clientRequest = gson.fromJson(jsonRequest, ClientRequest.class);
-
-                        if (clientRequest.getRequestType() == ClientRequest.Type.CONNECT){
-                            User fromUser = clientRequest.getFrom();
-
-                            int id = fromUser.getUserID();
-                            String username = fromUser.getUsername();
-
-                            boolean isUserExists = DatabaseHandler.checkUser(id,username);
-
-                            if (isUserExists) {
-
-                                fromUser.setInputReader(in);
-                                fromUser.setOutputWriter(out);
-                                fromUser.setClient(client);
-
-                                ServerRequest serverRequest = new ServerRequest(
-                                        client.getInetAddress(),
-                                        fromUser,ServerRequest.Type.SUCCESSFUL_CONNECTION,
-                                        null
-                                );
-                                out.println(gson.toJson(serverRequest) + "\0");
-
-                                System.out.printf(CLIENT_RECOGNIZED,client.getInetAddress(), username, id);
-
-                                return fromUser;
-                            }
-                            else{
-                                JsonObject errorJson = new JsonObject();
-                                errorJson.addProperty("error_code",Error.USER_NOT_FOUND.getCode());
-                                ServerRequest serverRequest = new ServerRequest(
-                                        client.getInetAddress(),
-                                        null,
-                                        ServerRequest.Type.ERROR,
-                                        Error.USER_NOT_FOUND
-                                );
-
-                                out.println(gson.toJson(serverRequest) + "\0");
-
-                                client.close();
-                                System.out.printf(CONNECTION_REQUEST_DECLINED,
-                                        client.getInetAddress(),
-                                        String.format("User %s(userID: %d) not found",username,id)
-                                );
-                                return null;
-                            }
-                        }
-                        else {
-                            ServerRequest serverRequest = new ServerRequest(
-                                    client.getInetAddress(),
-                                    null,
-                                    ServerRequest.Type.ERROR,
-                                    Error.BAD_REQUEST
-                            );
-
-                            out.println(gson.toJson(serverRequest) + "\0");
-
-                            client.close();
-
-                            JsonElement el = JsonParser.parseString(json.toString());
-                            json = new StringBuilder(gson.toJson(el));
-
-                            System.out.printf(CONNECTION_REQUEST_DECLINED,
-                                    client.getInetAddress(),
-                                    "invalid connection request(invalid request type for connection):\n" + json
-                            );
-                            return null;
-                        }
-
-                    }
-                    catch (JsonSyntaxException e){
-                        ServerRequest serverRequest = new ServerRequest(
-                                client.getInetAddress(),
-                                null,
-                                ServerRequest.Type.ERROR,
-                                Error.BAD_REQUEST);
-
-                        out.println(gson.toJson(serverRequest) + "\0");
-
-                        client.close();
-                        System.out.printf(CONNECTION_REQUEST_DECLINED,
-                                client.getInetAddress(),
-                                "invalid connection request(invalid JSON syntax):\n" + json + "\n" + e.getMessage());
-                        return null;
-                    }
-                }
+            try {
+                user.setInputReader(new BufferedReader(new InputStreamReader(client.getInputStream())));
+                user.setOutputWriter(new PrintWriter(client.getOutputStream(),true));
+                user.setClient(client);
+            }
+            catch (IOException e){
+                System.out.printf(ERROR_OCCURRED, "authorize user: " + e.getMessage());
+                return new AuthorizationResult(false, null, Error.SERVER_ERROR);
             }
         }
-        catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-        return null;
+        return authResult;
     }
 
     private static void handleClient(User user) {
         onlineUsers.add(user);
+        DatabaseHandler.setLastUserOnline(user,null);
 
         try (
                 BufferedReader input = user.getInputReader();
@@ -604,6 +571,7 @@ public class Server {
             }
 
             onlineUsers.remove(user);
+            DatabaseHandler.setLastUserOnline(user, System.currentTimeMillis());
             System.out.println("User " + user.getUsername() + "(ip: " + ip + ") disconnected");
         }
         catch (IOException e) {
@@ -611,6 +579,7 @@ public class Server {
             if (isClosed){
                 System.out.printf("User %s(userID: %d) disconnected: %s", user.getUsername(),user.getUserID(),"client initiated disconnect\n");
                 onlineUsers.remove(user);
+                DatabaseHandler.setLastUserOnline(user,System.currentTimeMillis());
             }
             else {
                 String clientInstanceDesc = String.format("%s(userID: %d, ip: %s)", user.getUsername(), user.getUserID(), user.getClient().getInetAddress());
@@ -619,6 +588,19 @@ public class Server {
             }
         }
 
+    }
+
+    private static ClientRequest parseCLientRequest(String json){
+        try {
+            return gson.fromJson(json, ClientRequest.class);
+        }
+        catch (JsonSyntaxException e){
+            System.out.printf(
+                    ERROR_OCCURRED,
+                    "parse client request: " + e.getMessage()
+            );
+            return null;
+        }
     }
 
     private static String removeNullByte(String str){
