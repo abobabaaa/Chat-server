@@ -12,18 +12,18 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.cert.CertificateException;
-import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 
 public class Server {
     private static final int PORT = 2865;
-    private static final String KEY_STORE_PASSWORD = "12345_Ab";
-    private static final String KEY_STORE_PATH = "C:\\Users\\jagua\\Desktop\\Chat-server\\ChatServer\\src\\main\\java\\org\\example\\keystore\\keystore.p12";
-    private static final String KEY_STORE_TYPE = "PKCS12";
-    private static final String KEY_MANAGER_ALGORITHM = "SunX509";
-    private static final String ENCRYPTION_ALGORITHM = "TLSv1.3";
+    private static final String KEY_STORE_PASSWORD = "KEY_STORE_PASSWORD";
+    private static final String KEY_STORE_PATH = "KEY_STORE_PATH";
+    private static final String KEY_STORE_TYPE = "KEY_STORE_TYPE";
+    private static final String KEY_MANAGER_ALGORITHM = "KEY_MANAGER_ALGORITHM";
+    private static final String ENCRYPTION_ALGORITHM = "ENCRYPTION_ALGORITHM";
 
     public static final String SERVER_DATETIME_FORMAT = "dd-MM-yyyy|hh:mm";
 
@@ -39,9 +39,9 @@ public class Server {
 
     private static final String CONNECTION_REQUEST = "Connection request received, ip: %s\n";
 
-    private static final String CLIENT_RECOGNIZED =
+    private static final String CLIENT_AUTHORIZED =
             ConsoleColor.GREEN +
-            "Client with ip %s successfully connected and recognized as %s(userID: %d)!" +
+            "Client with ip %s successfully connected and authorized as %s(userID: %d)!" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String INVALID_REQUEST =
@@ -115,6 +115,8 @@ public class Server {
 
                         StringBuilder jsonStr = new StringBuilder();
                         String line;
+                        String deviceUID = null;
+                        User registeredUser = null;
                         while ((line = in.readLine()) != null){
                             jsonStr.append(line);
 
@@ -143,6 +145,7 @@ public class Server {
                                 String password = body.get("password").getAsString();
                                 switch (clientRequest.getRequestType()){
                                     case AUTHORIZE_AND_CONNECT -> {
+                                        //TODO: Remake authorization(handle device UID)
                                         AuthorizationResult authResult = authorizeUser(client,username,password);
 
                                         if (authResult.isSuccess()){
@@ -158,7 +161,7 @@ public class Server {
 
                                             int userID = user.getUserID();
                                             System.out.printf(
-                                                    CLIENT_RECOGNIZED,
+                                                    CLIENT_AUTHORIZED,
                                                     ip,
                                                     username,
                                                     userID
@@ -182,12 +185,87 @@ public class Server {
                                                     ip,"authorization failed. " + authResult.error().getMessage()
                                             );
                                         }
+                                        client.close();
                                     }
                                     case REGISTER_ACCOUNT -> {
-                                        //registration
+                                        RegistrationResult result = registerUser(client, username, password);
+                                        if (result.isSuccess()){
+                                            User user = result.user();
+                                            int userID = user.getUserID();
+
+                                            SecureRandom secureRandom = new SecureRandom();
+                                            byte[] bytes = new byte[32];
+                                            secureRandom.nextBytes(bytes);
+                                            deviceUID = Base64.getEncoder().encodeToString(bytes);
+
+                                            JsonObject jsonObject = new JsonObject();
+                                            jsonObject.addProperty("user_id",user.getUserID());
+                                            jsonObject.addProperty("username", user.getUsername());
+                                            jsonObject.addProperty("device_uid",deviceUID);
+                                            //there
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    ip,
+                                                    null,
+                                                    ServerRequest.Type.SUCCESSFUL_REGISTRATION,
+                                                    jsonObject
+                                            );
+                                            out.println(gson.toJson(serverRequest) + "\0");
+
+                                            String formattedUser = String.format("%s(userID: %d)", user.getUsername(), userID);
+                                            System.out.printf(
+                                                    GREEN_MESSAGE,
+                                                    "Successfully registered new user " + formattedUser +
+                                                    "! Waiting for device uid confirmation.."
+                                            );
+                                            registeredUser = user;
+                                        }
+                                        else {
+                                            Error resultError = result.error();
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    ip,
+                                                    null,
+                                                    ServerRequest.Type.REGISTRATION_FAILED,
+                                                    resultError
+                                            );
+                                            out.println(gson.toJson(serverRequest) + "\0");
+                                            System.out.printf(RED_MESSAGE, "Failed to register user " + username + ": " + resultError);
+                                            client.close();
+                                        }
+                                    }
+                                    case DEVICE_UID_RECEIVED -> {
+                                        if (deviceUID != null){
+                                            boolean isSuccess = false;
+                                            for (int i = 0; i <= 3; i++) {
+                                                isSuccess = DatabaseHandler.saveDeviceUID(registeredUser.getUserID(),deviceUID);
+                                                if (isSuccess)
+                                                    break;
+                                            }
+                                            if (isSuccess){
+                                                System.out.printf(
+                                                        CLIENT_AUTHORIZED,
+                                                        ip, username, registeredUser.getUserID()
+                                                );
+                                                handleClient(registeredUser);
+                                            }
+                                            else {
+                                                System.out.printf(RED_MESSAGE, "deviceUID save of user " + username + " failed!");
+                                                client.close();
+                                                System.out.printf(
+                                                        USER_DISCONNECTED_BY_SERVER,
+                                                        username, registeredUser.getUserID(),
+                                                        "device UID save failed after 3 attempts"
+                                                );
+                                            }
+                                        }
+                                        else {
+                                            client.close();
+                                            System.out.printf(
+                                                    RED_MESSAGE, "deviceUID is null! User " + username
+                                                    + "was forcibly disconnected"
+                                            );
+                                        }
                                     }
                                 }
-                                break;
                             }
                         }
                     }
@@ -252,11 +330,29 @@ public class Server {
                 user.setClient(client);
             }
             catch (IOException e){
-                System.out.printf(ERROR_OCCURRED, "authorize user: " + e.getMessage());
+                System.out.printf(ERROR_OCCURRED, "authorize user " + username + ": " + e.getMessage());
                 return new AuthorizationResult(false, null, Error.SERVER_ERROR);
             }
         }
         return authResult;
+    }
+
+    private static RegistrationResult registerUser(Socket client, String username, String password){
+        RegistrationResult registrationResult = DatabaseHandler.registerUser(username, password);
+
+        if (registrationResult.isSuccess()){
+            try {
+                User user = registrationResult.user();
+                user.setInputReader(new BufferedReader(new InputStreamReader(client.getInputStream())));
+                user.setOutputWriter(new PrintWriter(client.getOutputStream(), true));
+                user.setClient(client);
+            }
+            catch (IOException e){
+                System.out.printf(ERROR_OCCURRED, "register user " + username + ": " + e.getMessage());
+                return new RegistrationResult(false,null, Error.SERVER_ERROR);
+            }
+        }
+        return registrationResult;
     }
 
     private static void handleClient(User user) {
@@ -282,6 +378,7 @@ public class Server {
                     String request = removeNullByte(json.toString());
 
                     try {
+                        //TODO: use parseClientRequest method
                         ClientRequest clientRequest = gson.fromJson(request,ClientRequest.class);
                         User fromUser = clientRequest.getFrom();
 

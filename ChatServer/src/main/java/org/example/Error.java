@@ -15,6 +15,8 @@ public enum Error {
     AUTH_USER_NOT_FOUND(201,"Target user for authorization not found"),
     AUTH_INCORRECT_PASSWORD(202,"Incorrect password"),
 
+    REG_USERNAME_OCCUPIED(101,"User with this username is already exists"),
+
     CHAT_NOT_FOUND(403,"Chat not found"),
     DUPLICATED_CONNECTION(404,"Client with this ip is already connected"),
     DATABASE_ERROR(501,"Database error"),

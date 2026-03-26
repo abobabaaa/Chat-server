@@ -12,9 +12,9 @@ import java.util.Date;
 import java.util.List;
 
 public class DatabaseHandler {
-    private static final String url = "DB_URL";
-    private static final String username = "DB_USERNAME";
-    private static final String password = "DB_PASSWORD";
+    private static final String DB_URL = "DB_URL";
+    private static final String DB_USERNAME = "DB_USERNAME";
+    private static final String DB_PASSWORD = "DB_PASSWORD";
 
     private static final String ERROR_TEMPLATE =
             ConsoleColor.RED +
@@ -28,7 +28,7 @@ public class DatabaseHandler {
 
     public static Connection getConnection(){
         try {
-            return DriverManager.getConnection(url,username,password);
+            return DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
         }
         catch (SQLException e) {
             throw new RuntimeException(e);
@@ -84,6 +84,14 @@ public class DatabaseHandler {
                 )
                 """;
 
+        String createDevicesTable =
+                """
+                create table if not exists devices(
+                device_uid varchar(32) not null primary key,
+                user_id int not null
+                )
+                """;
+
         String add_prc_fk_user1_id =
                 """
                 alter table private_chats add constraint pr_fk_user1_id foreign key(user_1_id) references users(id)
@@ -110,6 +118,12 @@ public class DatabaseHandler {
                 alter table messages add constraint msg_fk_from_user_id foreign key(from_user_id) references users(id)
                 on update restrict
                 """;
+
+        String add_devices_fk_user_id =
+                """
+                alter table devices add constraint fk_user_id
+                foreign key(user_id) references users(id)
+                """;
         try {
             Statement stmt = connection.createStatement();
             stmt.execute(createUsersTable);
@@ -118,11 +132,13 @@ public class DatabaseHandler {
             stmt.execute(addCheckChatTrigger);
 
             stmt.execute(createMessagesTable);
+            stmt.execute(createDevicesTable);
 
             stmt.addBatch(add_prc_fk_user1_id);
             stmt.addBatch(add_prc_fk_user2_id);
             stmt.addBatch(add_msg_fk_chat_id);
             stmt.addBatch(add_msg_fk_from_user_id);
+            stmt.addBatch(add_devices_fk_user_id);
 
             stmt.executeBatch();
             stmt.clearBatch();
@@ -243,6 +259,73 @@ public class DatabaseHandler {
             System.out.printf(ERROR_TEMPLATE,"authorize user",e.getMessage());
             e.printStackTrace();
             return new AuthorizationResult(false,null,Error.DATABASE_ERROR);
+        }
+    }
+
+    public static RegistrationResult registerUser(String username, String password) {
+        Connection connection = getConnection();
+        String select = "select * from users where username = ?";
+        try {
+            PreparedStatement prstmt = connection.prepareStatement(select);
+            prstmt.setString(1,username);
+
+            ResultSet resultSet = prstmt.executeQuery();
+            if (resultSet.next())
+                return new RegistrationResult(false,null, Error.REG_USERNAME_OCCUPIED);
+            else {
+                String insert = "insert into users(username, password) values(?, ?)";
+                prstmt = connection.prepareStatement(insert, Statement.RETURN_GENERATED_KEYS);
+
+                String hashedPassword = BCrypt.hashpw(password, BCrypt.gensalt());
+                prstmt.setString(1, username);
+                prstmt.setString(2, hashedPassword);
+
+                int rows = prstmt.executeUpdate();
+                if (rows > 0){
+                    int userID = prstmt.getGeneratedKeys().getInt(1);
+                    User user = new User(userID,username);
+                    return new RegistrationResult(true, user, null);
+                }
+                else {
+                    System.out.printf(
+                            WARNING_TEMPLATE,
+                            "insertion query failed",
+                            "register new user",
+                            "registerUser method"
+                    );
+                    return new RegistrationResult(false, null, Error.DATABASE_ERROR);
+                }
+            }
+        }
+        catch (SQLException e){
+            System.out.printf(ERROR_TEMPLATE, "register new user", e.getMessage());
+            return  new RegistrationResult(false, null, Error.DATABASE_ERROR);
+        }
+    }
+
+    public static boolean saveDeviceUID(int userID, String deviceUID){
+        Connection connection= getConnection();
+        String insert = "insert into devices(device_uid, user_id) values(?, ?)";
+        try {
+            PreparedStatement prstmt = connection.prepareStatement(insert);
+            prstmt.setString(1,deviceUID);
+            prstmt.setInt(2, userID);
+
+            int rows = prstmt.executeUpdate();
+            if (rows > 0){
+                return true;
+            }
+            System.out.printf(
+                    WARNING_TEMPLATE,
+                    "Insertion query returned 0",
+                    "insert new device UID",
+                    "saveDeviceUID method"
+            );
+            return false;
+        }
+        catch (SQLException e){
+            System.out.printf(ERROR_TEMPLATE, "insert device UID", e.getMessage());
+            return false;
         }
     }
 
