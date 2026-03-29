@@ -5,6 +5,7 @@ import org.example.messages.TextMessage;
 import org.jetbrains.annotations.NotNull;
 import org.mindrot.jbcrypt.BCrypt;
 
+import java.net.InetAddress;
 import java.sql.*;
 import java.time.LocalDateTime;
 import java.util.Calendar;
@@ -25,6 +26,8 @@ public class DatabaseHandler {
             ConsoleColor.YELLOW +
             "[DATABASE]: WARNING! %s while trying to %s\n(%s)" +
             ConsoleColor.RESET_COLOR + "\n";
+
+    private static final String DB_MESSAGE = "[DATABASE]: %s";
 
     public static Connection getConnection(){
         try {
@@ -84,10 +87,21 @@ public class DatabaseHandler {
                 )
                 """;
 
+        //TODO: Make ip field unique
+        String createAuthRequestsTable =
+                """
+                create table if not exists auth_requests(
+                    id int not null primary key auto_increment,
+                    ip varchar(32) not null unique,
+                    target_user int not null,
+                    created_at timestamp default current_timestamp
+                )
+                """;
+
         String createDevicesTable =
                 """
                 create table if not exists devices(
-                device_uid varchar(32) not null primary key,
+                device_uid varchar(46) not null primary key,
                 user_id int not null
                 )
                 """;
@@ -123,6 +137,16 @@ public class DatabaseHandler {
                 """
                 alter table devices add constraint fk_user_id
                 foreign key(user_id) references users(id)
+                on delete cascade
+                on update restrict
+                """;
+
+        String add_auth_req_fk_target_user_id =
+                """
+                alter table auth_requests add constraint fk_target_user_id
+                foreign key(target_user) references users(id)
+                on delete cascade
+                on update restrict
                 """;
         try {
             Statement stmt = connection.createStatement();
@@ -133,12 +157,14 @@ public class DatabaseHandler {
 
             stmt.execute(createMessagesTable);
             stmt.execute(createDevicesTable);
+            stmt.execute(createAuthRequestsTable);
 
             stmt.addBatch(add_prc_fk_user1_id);
             stmt.addBatch(add_prc_fk_user2_id);
             stmt.addBatch(add_msg_fk_chat_id);
             stmt.addBatch(add_msg_fk_from_user_id);
             stmt.addBatch(add_devices_fk_user_id);
+            stmt.addBatch(add_auth_req_fk_target_user_id);
 
             stmt.executeBatch();
             stmt.clearBatch();
@@ -225,7 +251,7 @@ public class DatabaseHandler {
         }
     }
 
-    public static AuthorizationResult authorizeUser(String username, String password){
+    public static AuthorizationResult authorizeUser(String username, String password, String deviceUID){
         String selectUser = "select * from users where username = ?";
         Connection connection = getConnection();
 
@@ -234,16 +260,33 @@ public class DatabaseHandler {
             prstmt.setString(1, username);
             ResultSet resultSet = prstmt.executeQuery();
 
+            int userID;
             if (resultSet.next()){
                 String hashedPassword = resultSet.getString("password");
+                userID = resultSet.getInt("id");
+
+                if (deviceUID == null)
+                    return new AuthorizationResult(false, null, userID, Error.AUTH_NO_DEVICE_UID);
 
                 if (BCrypt.checkpw(password,hashedPassword)){
-                    int userID = resultSet.getInt("id");
-                    User user = new User(userID,username);
-                    return new AuthorizationResult(true,user,null);
+
+                    String selectDevice = "select * from devices where user_id = ?";
+                    prstmt = connection.prepareStatement(selectDevice);
+                    prstmt.setInt(1, userID);
+
+                    resultSet = prstmt.executeQuery();
+
+                    while (resultSet.next()){
+                        String dbUID = resultSet.getString("device_uid");
+                        if (dbUID.equals(deviceUID)){
+                            User user = new User(userID,username);
+                            return new AuthorizationResult(true,user,userID,null);
+                        }
+                    }
+                    return  new AuthorizationResult(false,null,userID,Error.AUTH_UNKNOWN_DEVICE);
                 }
                 else {
-                    return new AuthorizationResult(false,null,Error.AUTH_INCORRECT_PASSWORD);
+                    return new AuthorizationResult(false,null,userID,Error.AUTH_INCORRECT_PASSWORD);
                 }
             }
             else {
@@ -252,13 +295,13 @@ public class DatabaseHandler {
                         "authorize user",
                         "user with username " + username + " not found"
                 );
-                return new AuthorizationResult(false,null,Error.AUTH_USER_NOT_FOUND);
+                return new AuthorizationResult(false,null,0,Error.AUTH_USER_NOT_FOUND);
             }
         }
         catch (SQLException e){
             System.out.printf(ERROR_TEMPLATE,"authorize user",e.getMessage());
             e.printStackTrace();
-            return new AuthorizationResult(false,null,Error.DATABASE_ERROR);
+            return new AuthorizationResult(false,null,0,Error.DATABASE_ERROR);
         }
     }
 
@@ -282,9 +325,21 @@ public class DatabaseHandler {
 
                 int rows = prstmt.executeUpdate();
                 if (rows > 0){
-                    int userID = prstmt.getGeneratedKeys().getInt(1);
-                    User user = new User(userID,username);
-                    return new RegistrationResult(true, user, null);
+                    ResultSet generatedKeys = prstmt.getGeneratedKeys();
+                    if (generatedKeys.next()){
+                        int userID = generatedKeys.getInt(1);
+                        User user = new User(userID,username);
+                        return new RegistrationResult(true, user, null);
+                    }
+                    else {
+                        System.out.printf(
+                                WARNING_TEMPLATE,
+                                "Insertion query returned nothing(expected userID)",
+                                "register new user",
+                                "registerUser method"
+                        );
+                        return new RegistrationResult(false,null,Error.DATABASE_ERROR);
+                    }
                 }
                 else {
                     System.out.printf(
@@ -326,6 +381,96 @@ public class DatabaseHandler {
         catch (SQLException e){
             System.out.printf(ERROR_TEMPLATE, "insert device UID", e.getMessage());
             return false;
+        }
+    }
+
+    public static Auth2FARequest create2FARequest(InetAddress ip, int targetUser){
+        Connection conn = getConnection();
+        String insert = "insert into auth_requests(ip, target_user) values(?, ?)";
+        try {
+            PreparedStatement prstmt = conn.prepareStatement(insert, Statement.RETURN_GENERATED_KEYS);
+            prstmt.setString(1,ip.toString());
+            prstmt.setInt(2,targetUser);
+
+            int rows = prstmt.executeUpdate();
+
+            if (rows > 0){
+                ResultSet generatedKeys = prstmt.getGeneratedKeys();
+                if (generatedKeys.next()){
+                    int requestID = generatedKeys.getInt(1);
+
+                    String select = "select created_at from auth_requests where id = ?";
+                    prstmt = conn.prepareStatement(select);
+                    prstmt.setInt(1, requestID);
+
+                    ResultSet resultSet = prstmt.executeQuery();
+                    if (resultSet.next()){
+                        Timestamp date = resultSet.getTimestamp(1);
+                        return new Auth2FARequest(requestID,ip,targetUser,date);
+                    }
+                    else {
+                        System.out.printf(
+                                WARNING_TEMPLATE,
+                                "Selection query returned nothing(expected 2FA request date)",
+                                "select date of created 2FA request from the database",
+                                "create2FAAuthRequest method"
+                        );
+                        return null;
+                    }
+                }
+                else{
+                    System.out.printf(
+                            WARNING_TEMPLATE,
+                            "Insertion query returned nothing(expected 2FA request id)",
+                            "create new 2FA request",
+                            "create2FARequest method"
+                    );
+                    return null;
+                }
+            }
+            else {
+                System.out.printf(
+                        WARNING_TEMPLATE,
+                        "insertion query returned 0",
+                        "create new 2FA authorization request",
+                        "create2FAAuthRequest method"
+                );
+                return null;
+            }
+
+        }
+        catch (SQLException e){
+            System.out.printf(ERROR_TEMPLATE, "create authorization request", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Removes 2FA request with a specified id from the database
+     * @param requestID id of 2FA request to remove
+     */
+    public static void remove2FARequest(int requestID) {
+        Connection connection = getConnection();
+        String remove = "delete from auth_requests where id = ?";
+        try {
+            PreparedStatement prstmt = connection.prepareStatement(remove);
+            prstmt.setInt(1, requestID);
+
+            int rows = prstmt.executeUpdate();
+            if (rows > 0){
+                System.out.printf(DB_MESSAGE, "Successfully removed 2FA request with id" + requestID + "!");
+            }
+            else {
+                System.out.printf(
+                        WARNING_TEMPLATE,
+                        "deletion request returned 0",
+                        "remove 2FA request with id" + requestID +". Request with such id is not exists",
+                        "remove2FARequest method"
+                );
+            }
+        }
+        catch (SQLException e){
+            System.out.printf(ERROR_TEMPLATE, "remove 2FA request from the database", e.getMessage());
         }
     }
 

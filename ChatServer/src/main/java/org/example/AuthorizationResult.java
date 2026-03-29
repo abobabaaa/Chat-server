@@ -1,6 +1,6 @@
 package org.example;
 
-public record AuthorizationResult(boolean isSuccess, User user, Error error) {
+public record AuthorizationResult(boolean isSuccess, User user, int userID, Error error) {
     @Override
     public boolean isSuccess() {
         return isSuccess;
@@ -16,4 +16,8 @@ public record AuthorizationResult(boolean isSuccess, User user, Error error) {
         return error;
     }
 
+    @Override
+    public int userID() {
+        return userID;
+    }
 }

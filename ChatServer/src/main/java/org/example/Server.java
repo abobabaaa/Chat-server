@@ -30,6 +30,7 @@ public class Server {
     private static List<User> onlineUsers = Collections.synchronizedList(new ArrayList<>());
     private static List<User> allUsers = Collections.synchronizedList(new ArrayList<>());
     private static List<Chat> allChats = Collections.synchronizedList(new ArrayList<>());
+    private static List<Auth2FARequest> auth2FARequests = Collections.synchronizedList(new ArrayList<>());
 
     private static final Gson gson = new GsonBuilder()
             .registerTypeAdapter(Error.class, new Error.ErrorSerializer())
@@ -37,36 +38,36 @@ public class Server {
             .setPrettyPrinting()
             .create();
 
-    private static final String CONNECTION_REQUEST = "Connection request received, ip: %s\n";
+    private static final String CONNECTION_REQUEST = "[SERVER]: Connection request received, ip: %s\n";
 
     private static final String CLIENT_AUTHORIZED =
             ConsoleColor.GREEN +
-            "Client with ip %s successfully connected and authorized as %s(userID: %d)!" +
+            "[SERVER]: Client with ip %s successfully connected and authorized as %s(userID: %d)!" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String INVALID_REQUEST =
             ConsoleColor.YELLOW +
-            "Invalid request from user %s(userID: %d, ip: %s):\n%s" +
+            "[SERVER]: Invalid request from user %s(userID: %d, ip: %s):\n%s" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String CONNECTION_REQUEST_DECLINED =
             ConsoleColor.RED +
-            "Connection request from ip %s declined by server: %s" +
+            "[SERVER]: Connection request from ip %s declined by server: %s" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String USER_DISCONNECTED_BY_SERVER =
             ConsoleColor.RED +
-            "User %s(userID: %d) disconnected by server: %s" +
+            "[SERVER]: User %s(userID: %d) disconnected by server: %s" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String CHAT_CREATED =
             ConsoleColor.GREEN +
-            "Successfully created private chat(chatID: %d)" +
+            "[SERVER]: Successfully created private chat(chatID: %d)" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String ERROR_OCCURRED =
             ConsoleColor.RED +
-            "An error occurred while trying to %s" +
+            "[SERVER]: An error occurred while trying to %s: %s" +
             ConsoleColor.RESET_COLOR + "\n";
 
     private static final String RED_MESSAGE = ConsoleColor.RED + "%s" + ConsoleColor.RESET_COLOR + "\n";
@@ -105,18 +106,19 @@ public class Server {
 
             while (true){
                 SSLSocket client = (SSLSocket) serverSocket.accept();
-                System.out.printf(CONNECTION_REQUEST,client.getInetAddress().toString());
+                System.out.printf(CONNECTION_REQUEST,client.getInetAddress().getHostAddress());
 
                 new Thread(()->{
                     InetAddress ip = client.getInetAddress();
+                    PrintWriter out = null;
                     try {
                         BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
-                        PrintWriter out = new PrintWriter(client.getOutputStream(), true);
+                        out = new PrintWriter(client.getOutputStream(), true);
 
                         StringBuilder jsonStr = new StringBuilder();
                         String line;
-                        String deviceUID = null;
-                        User registeredUser = null;
+                        String registeredDeviceUID = null;
+                        User createdUser = null;
                         while ((line = in.readLine()) != null){
                             jsonStr.append(line);
 
@@ -132,21 +134,26 @@ public class Server {
                                             Error.BAD_REQUEST
                                     );
                                     out.println(gson.toJson(serverRequest) + "\0");
+
                                     in.close();
                                     out.close();
                                     client.close();
-
                                     System.out.printf(CONNECTION_REQUEST_DECLINED, ip, "Invalid json request");
-                                    break;
+                                    return;
                                 }
 
                                 JsonObject body = clientRequest.getRequestBody();
-                                String username = body.get("username").getAsString();
-                                String password = body.get("password").getAsString();
+                                String username = null;
+                                String password;
+
                                 switch (clientRequest.getRequestType()){
                                     case AUTHORIZE_AND_CONNECT -> {
+                                        username = body.get("username").getAsString();
+                                        password = body.get("password").getAsString();
                                         //TODO: Remake authorization(handle device UID)
-                                        AuthorizationResult authResult = authorizeUser(client,username,password);
+                                        JsonElement deviceUIDJson = body.get("device_uid");
+                                        String deviceUID = deviceUIDJson == null? null : deviceUIDJson.getAsString();
+                                        AuthorizationResult authResult = authorizeUser(client ,username, password, deviceUID);
 
                                         if (authResult.isSuccess()){
                                             User user = authResult.user();
@@ -167,42 +174,177 @@ public class Server {
                                                     userID
                                             );
                                             handleClient(authResult.user());
+                                            return;
                                         }
                                         else {
-                                            ServerRequest serverRequest = new ServerRequest(
-                                                    ip,
-                                                    null,
-                                                    ServerRequest.Type.ERROR,
-                                                    authResult.error()
-                                            );
-                                            out.println(gson.toJson(serverRequest) + "\0");
+                                            Error authError = authResult.error();
+                                            if (authError == Error.AUTH_UNKNOWN_DEVICE || authError == Error.AUTH_NO_DEVICE_UID){
+                                                int userID = authResult.userID();
+                                                Auth2FARequest auth2FARequest = DatabaseHandler.create2FARequest(ip, userID);
 
-                                            in.close();
-                                            out.close();
-                                            client.close();
-                                            System.out.printf(
-                                                    CONNECTION_REQUEST_DECLINED,
-                                                    ip,"authorization failed. " + authResult.error().getMessage()
-                                            );
+                                                if (auth2FARequest == null){
+                                                    System.out.printf(ERROR_OCCURRED, "create 2FA request", "2FA instance is null!");
+                                                    ServerRequest serverRequest = new ServerRequest(
+                                                            ip,
+                                                            null,
+                                                            ServerRequest.Type.ERROR,
+                                                            Error.DATABASE_ERROR
+                                                    );
+                                                    out.println(gson.toJson(serverRequest) + "\0");
+                                                    in.close();
+                                                    out.close();
+                                                    client.close();
+                                                    System.out.printf(CONNECTION_REQUEST_DECLINED, ip, "2FA failed");
+                                                    return;
+                                                }
+                                                auth2FARequests.add(auth2FARequest);
+
+                                                for (User user : onlineUsers){
+                                                    if (user.getUsername().equals(username)){
+
+                                                        ServerRequest serverRequest = new ServerRequest(
+                                                                user.getClient().getInetAddress(),
+                                                                user,
+                                                                ServerRequest.Type.AUTH_2FA_CONFIRMATION,
+                                                                auth2FARequest
+                                                        );
+                                                        user.getOutputWriter().println(gson.toJson(serverRequest) + "\0");
+                                                    }
+                                                }
+
+                                                ServerRequest serverRequest = new ServerRequest(
+                                                        ip,
+                                                        null,
+                                                        ServerRequest.Type.AUTH_2FA_CONFIRMATION_SENT,
+                                                        null
+                                                );
+                                                out.println(gson.toJson(serverRequest) + "\0");
+
+                                                Auth2FARequest.Status auth2FAResult;
+                                                try {
+
+                                                    auth2FAResult = auth2FARequest.notifyInitiator();
+                                                }
+                                                catch (InterruptedException e){
+                                                    System.out.printf(ERROR_OCCURRED, "receive result of 2FA: ",e.getMessage());
+                                                    serverRequest = new ServerRequest(
+                                                            ip,
+                                                            null,
+                                                            ServerRequest.Type.ERROR,
+                                                            Error.SERVER_ERROR
+                                                    );
+                                                    out.println(gson.toJson(serverRequest) + "\0");
+                                                    remove2FARequest(auth2FARequest.getId());
+                                                    in.close();
+                                                    out.close();
+                                                    client.close();
+                                                    System.out.printf(CONNECTION_REQUEST_DECLINED, ip, "Server error occurred. Cannot continue handling");
+                                                    return;
+                                                }
+
+                                                if (auth2FAResult != null){
+                                                    switch (auth2FAResult){
+                                                        case ACCESS_GRANTED -> {
+                                                            registeredDeviceUID = generateDeviceUID();
+                                                            boolean isSuccess = DatabaseHandler.saveDeviceUID(userID, registeredDeviceUID);
+
+                                                            if (isSuccess){
+                                                                createdUser = new User(userID, username, out, in, client);
+
+                                                                JsonObject jsonObject = new JsonObject();
+                                                                jsonObject.addProperty("device_uid", registeredDeviceUID);
+
+                                                                serverRequest = new ServerRequest(
+                                                                        ip,
+                                                                        createdUser,
+                                                                        ServerRequest.Type.SUCCESSFUL_AUTHORIZATION,
+                                                                        jsonObject
+                                                                );
+                                                                out.println(gson.toJson(serverRequest) + "\0");
+                                                                System.out.printf(GREEN_MESSAGE,
+                                                                        "Successfully authorized new device for user " +
+                                                                        username + ". Waiting for device UID confirmation..."
+                                                                );
+                                                                remove2FARequest(auth2FARequest.getId());
+                                                            }
+                                                            else {
+                                                                System.out.printf(ERROR_OCCURRED, "save new device UID", "Database error occurred");
+                                                                serverRequest = new ServerRequest(
+                                                                        ip,
+                                                                        null,
+                                                                        ServerRequest.Type.ERROR,
+                                                                        Error.DATABASE_ERROR
+                                                                );
+                                                                out.println(gson.toJson(serverRequest) + "\0");
+                                                                in.close();
+                                                                out.close();
+                                                                client.close();
+                                                                System.out.printf(CONNECTION_REQUEST_DECLINED, ip, "Database error occurred. Cannot continue handling");
+                                                                remove2FARequest(auth2FARequest.getId());
+                                                                return;
+                                                            }
+
+                                                        }
+
+                                                        case ACCESS_DENIED -> {
+                                                            serverRequest = new ServerRequest(
+                                                                    ip,
+                                                                    null,
+                                                                    ServerRequest.Type.ERROR,
+                                                                    Error.AUTH_2FA_ACCESS_DENIED
+                                                            );
+                                                            out.println(gson.toJson(serverRequest) + "\0");
+                                                            in.close();
+                                                            out.close();
+                                                            client.close();
+                                                            System.out.printf(
+                                                                    CONNECTION_REQUEST_DECLINED, ip,
+                                                                    "Authorization failed: 2FA request was rejected from authorized device"
+                                                            );
+                                                            remove2FARequest(auth2FARequest.getId());
+                                                            return;
+                                                        }
+                                                    }
+
+                                                }
+                                            }
+                                            else {
+                                                ServerRequest serverRequest = new ServerRequest(
+                                                        ip,
+                                                        null,
+                                                        ServerRequest.Type.ERROR,
+                                                        authResult.error()
+                                                );
+                                                out.println(gson.toJson(serverRequest) + "\0");
+
+                                                in.close();
+                                                out.close();
+                                                client.close();
+                                                System.out.printf(
+                                                        CONNECTION_REQUEST_DECLINED,
+                                                        ip,"authorization failed. " + authResult.error().getMessage()
+                                                );
+                                                return;
+                                            }
                                         }
-                                        client.close();
+
                                     }
                                     case REGISTER_ACCOUNT -> {
+                                        username = body.get("username").getAsString();
+                                        password = body.get("password").getAsString();
+
                                         RegistrationResult result = registerUser(client, username, password);
                                         if (result.isSuccess()){
                                             User user = result.user();
                                             int userID = user.getUserID();
 
-                                            SecureRandom secureRandom = new SecureRandom();
-                                            byte[] bytes = new byte[32];
-                                            secureRandom.nextBytes(bytes);
-                                            deviceUID = Base64.getEncoder().encodeToString(bytes);
+                                            registeredDeviceUID = generateDeviceUID();
 
                                             JsonObject jsonObject = new JsonObject();
                                             jsonObject.addProperty("user_id",user.getUserID());
                                             jsonObject.addProperty("username", user.getUsername());
-                                            jsonObject.addProperty("device_uid",deviceUID);
-                                            //there
+                                            jsonObject.addProperty("device_uid",registeredDeviceUID);
+
                                             ServerRequest serverRequest = new ServerRequest(
                                                     ip,
                                                     null,
@@ -217,7 +359,7 @@ public class Server {
                                                     "Successfully registered new user " + formattedUser +
                                                     "! Waiting for device uid confirmation.."
                                             );
-                                            registeredUser = user;
+                                            createdUser = user;
                                         }
                                         else {
                                             Error resultError = result.error();
@@ -229,35 +371,53 @@ public class Server {
                                             );
                                             out.println(gson.toJson(serverRequest) + "\0");
                                             System.out.printf(RED_MESSAGE, "Failed to register user " + username + ": " + resultError);
+
+                                            in.close();
+                                            out.close();
                                             client.close();
+                                            return;
                                         }
                                     }
                                     case DEVICE_UID_RECEIVED -> {
-                                        if (deviceUID != null){
-                                            boolean isSuccess = false;
-                                            for (int i = 0; i <= 3; i++) {
-                                                isSuccess = DatabaseHandler.saveDeviceUID(registeredUser.getUserID(),deviceUID);
-                                                if (isSuccess)
-                                                    break;
-                                            }
+                                        if (registeredDeviceUID != null){
+                                            boolean isSuccess = DatabaseHandler.saveDeviceUID(createdUser.getUserID(),registeredDeviceUID);
                                             if (isSuccess){
+                                                ServerRequest serverRequest = new ServerRequest(
+                                                        ip,
+                                                        createdUser,
+                                                        ServerRequest.Type.DEVICE_UID_SAVED,
+                                                        null
+                                                );
+                                                out.println(gson.toJson(serverRequest) + "\0");
+
                                                 System.out.printf(
                                                         CLIENT_AUTHORIZED,
-                                                        ip, username, registeredUser.getUserID()
+                                                        ip, username, createdUser.getUserID()
                                                 );
-                                                handleClient(registeredUser);
+                                                handleClient(createdUser);
+                                                return;
                                             }
                                             else {
                                                 System.out.printf(RED_MESSAGE, "deviceUID save of user " + username + " failed!");
+
+                                                ServerRequest serverRequest = new ServerRequest(
+                                                        ip, createdUser, ServerRequest.Type.ERROR, Error.DATABASE_ERROR
+                                                );
+                                                out.println(gson.toJson(serverRequest) + "\0");
+
+                                                in.close();
+                                                out.close();
                                                 client.close();
                                                 System.out.printf(
                                                         USER_DISCONNECTED_BY_SERVER,
-                                                        username, registeredUser.getUserID(),
-                                                        "device UID save failed after 3 attempts"
+                                                        username, createdUser.getUserID(),
+                                                        "device UID save failed"
                                                 );
                                             }
                                         }
                                         else {
+                                            in.close();
+                                            out.close();
                                             client.close();
                                             System.out.printf(
                                                     RED_MESSAGE, "deviceUID is null! User " + username
@@ -266,13 +426,38 @@ public class Server {
                                         }
                                     }
                                 }
+                                jsonStr.delete(0, jsonStr.length());
                             }
                         }
                     }
                     catch (IOException e){
-                        System.out.printf(ERROR_OCCURRED, "handle connection of client with ip " + ip + ": " + e.getMessage());
+                        System.out.printf(ERROR_OCCURRED, "handle connection of client with ip " + ip, e.getMessage());
                         try {
+                            if (out != null) out.close();
                             client.close();
+                        }
+                        catch (IOException ex) {
+                            throw new RuntimeException(ex);
+                        }
+                    }
+                    catch (JsonSyntaxException e){
+                        ServerRequest serverRequest = new ServerRequest(
+                                ip,
+                                null,
+                                ServerRequest.Type.ERROR,
+                                Error.BAD_REQUEST
+                        );
+                        if (out != null){
+                            out.println(gson.toJson(serverRequest));
+                        }
+                        try {
+                            if (out != null) out.close();
+                            client.close();
+                            System.out.printf(
+                                    CONNECTION_REQUEST_DECLINED,
+                                    ip,
+                                    "Bad request: " + e.getMessage()
+                            );
                         }
                         catch (IOException ex) {
                             throw new RuntimeException(ex);
@@ -309,17 +494,15 @@ public class Server {
         catch (KeyStoreException | NoSuchAlgorithmException |
                UnrecoverableKeyException | KeyManagementException |
                IOException | CertificateException e) {
-            System.out.printf(
-                    ERROR_OCCURRED,
-                    "initialize secure server socket: " + e.getMessage()
-            );
+
+            System.out.printf(ERROR_OCCURRED, "initialize secure server socket", e.getMessage());
             return null;
         }
     }
 
 
-    private static AuthorizationResult authorizeUser(Socket client, String username, String password) {
-        AuthorizationResult authResult = DatabaseHandler.authorizeUser(username, password);
+    private static AuthorizationResult authorizeUser(Socket client, String username, String password, String deviceUID) {
+        AuthorizationResult authResult = DatabaseHandler.authorizeUser(username, password, deviceUID);
 
         if (authResult.isSuccess()) {
             User user = authResult.user();
@@ -330,8 +513,8 @@ public class Server {
                 user.setClient(client);
             }
             catch (IOException e){
-                System.out.printf(ERROR_OCCURRED, "authorize user " + username + ": " + e.getMessage());
-                return new AuthorizationResult(false, null, Error.SERVER_ERROR);
+                System.out.printf(ERROR_OCCURRED, "authorize user " + username, e.getMessage());
+                return new AuthorizationResult(false, null, 0, Error.SERVER_ERROR);
             }
         }
         return authResult;
@@ -348,11 +531,20 @@ public class Server {
                 user.setClient(client);
             }
             catch (IOException e){
-                System.out.printf(ERROR_OCCURRED, "register user " + username + ": " + e.getMessage());
+                System.out.printf(ERROR_OCCURRED, "register user " + username, e.getMessage());
                 return new RegistrationResult(false,null, Error.SERVER_ERROR);
             }
         }
         return registrationResult;
+    }
+
+    /**
+     * This method removes {@link Auth2FARequest} instance from server memory and from the database
+     * @param requestID id of target request
+     */
+    private static void remove2FARequest(int requestID){
+        auth2FARequests.removeIf(request -> request.getId() == requestID);
+        DatabaseHandler.remove2FARequest(requestID);
     }
 
     private static void handleClient(User user) {
@@ -378,8 +570,7 @@ public class Server {
                     String request = removeNullByte(json.toString());
 
                     try {
-                        //TODO: use parseClientRequest method
-                        ClientRequest clientRequest = gson.fromJson(request,ClientRequest.class);
+                        ClientRequest clientRequest = parseCLientRequest(request);
                         User fromUser = clientRequest.getFrom();
 
                         boolean isSenderExists = DatabaseHandler.checkUser(fromUser.getUserID(), fromUser.getUsername());
@@ -409,6 +600,52 @@ public class Server {
                         if (user.getUserID() == userId && user.getUsername().equals(username)){
                             switch (type){
 
+                                case AUTH_2FA_RESPOND -> {
+                                    int requestID = body.get("id").getAsInt();
+                                    boolean approve = body.get("approve").getAsBoolean();
+
+                                    Auth2FARequest auth2FARequest = null;
+                                    for (Auth2FARequest req : auth2FARequests){
+                                        if (req.getId() == requestID){
+                                            auth2FARequest = req;
+                                            break;
+                                        }
+                                    }
+
+                                    if (auth2FARequest != null){
+                                        try {
+                                            auth2FARequest.handle2FAResponse(approve);
+
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    ip,
+                                                    user,
+                                                    ServerRequest.Type.AUTH_2FA_RESPONSE_RECEIVED,
+                                                    body
+                                            );
+                                            output.println(gson.toJson(serverRequest) + "\0");
+                                        }
+                                        catch (InterruptedException e) {
+                                            System.out.printf(ERROR_OCCURRED, "approve 2FA request with id " + requestID, e.getMessage());
+                                            ServerRequest serverRequest = new ServerRequest(
+                                                    ip,
+                                                    user,
+                                                    ServerRequest.Type.ERROR,
+                                                    Error.SERVER_ERROR
+                                            );
+                                            output.println(gson.toJson(serverRequest) + "\0");
+                                        }
+                                    }
+                                    else {
+                                        ServerRequest serverRequest = new ServerRequest(
+                                                ip,
+                                                user,
+                                                ServerRequest.Type.ERROR,
+                                                Error.AUTH_2FA_REQUEST_NOT_FOUND
+                                        );
+                                        output.println(gson.toJson(serverRequest) + "\0");
+                                    }
+                                }
+
                                 case CREATE_CHAT -> {
                                     User withUser = gson.fromJson(gson.toJson(body), User.class);
                                     boolean isUserExists = DatabaseHandler.checkUser(withUser.getUserID(),withUser.getUsername());
@@ -434,7 +671,6 @@ public class Server {
                                                     Error.DATABASE_ERROR
                                             );
                                             output.println(gson.toJson(serverRequest) + "\0");
-                                            //Database will notify about error
                                         }
                                     }
                                     else {
@@ -615,10 +851,7 @@ public class Server {
                                             output.println(gson.toJson(serverRequest) + "\0");
 
                                             String formattedUser = String.format("%s(userID: %d)",username,userId);
-                                            System.out.printf(
-                                                    ERROR_OCCURRED,
-                                                    "handle request from user " + formattedUser + "(Database error)"
-                                            );
+                                            System.out.printf(ERROR_OCCURRED, "handle request from user " + formattedUser, "database error");
                                         }
                                     }
                                     else {
@@ -680,24 +913,26 @@ public class Server {
             }
             else {
                 String clientInstanceDesc = String.format("%s(userID: %d, ip: %s)", user.getUsername(), user.getUserID(), user.getClient().getInetAddress());
-                System.out.printf(ERROR_OCCURRED, "trying to handle client of user" + clientInstanceDesc);
-                e.printStackTrace();
+                System.out.printf(ERROR_OCCURRED, "trying to handle client of user" + clientInstanceDesc, e.getMessage());
             }
         }
 
     }
 
-    private static ClientRequest parseCLientRequest(String json){
-        try {
-            return gson.fromJson(json, ClientRequest.class);
-        }
-        catch (JsonSyntaxException e){
-            System.out.printf(
-                    ERROR_OCCURRED,
-                    "parse client request: " + e.getMessage()
-            );
-            return null;
-        }
+    private static ClientRequest parseCLientRequest(String json) throws JsonSyntaxException{
+        return gson.fromJson(json, ClientRequest.class);
+    }
+
+    /**
+     * Generates a {@link Base64} string from 32 byte array, filled with {@link SecureRandom}
+     * to use it as device UID
+     * @return generated device UID
+     */
+    private static String generateDeviceUID(){
+        byte[] bytes = new byte[32];
+        SecureRandom secureRandom = new SecureRandom();
+        secureRandom.nextBytes(bytes);
+        return Base64.getEncoder().encodeToString(bytes);
     }
 
     private static String removeNullByte(String str){
