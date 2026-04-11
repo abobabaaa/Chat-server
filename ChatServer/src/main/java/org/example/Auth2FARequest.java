@@ -4,15 +4,22 @@ import com.google.gson.annotations.SerializedName;
 
 import java.net.InetAddress;
 import java.sql.Timestamp;
+import java.util.concurrent.Callable;
 
-public final class Auth2FARequest {
+public final class Auth2FARequest implements Callable<Auth2FARequest.Status> {
     private final int id;
     private final InetAddress ip;
     @SerializedName("target_user_id")
     private final int targetUserID;
     @SerializedName("created_at")
     private final Timestamp createdAt;
-    private transient volatile Status auth2FAStatus;
+    @SerializedName("status")
+    private volatile Status auth2FAStatus;
+    private Error error;
+
+    {
+        error = null;
+    }
 
     public Auth2FARequest(
             int id,
@@ -42,6 +49,15 @@ public final class Auth2FARequest {
         return createdAt;
     }
 
+    public Error getError() {
+        return error;
+    }
+
+    public void setErrorStatus(Error error){
+        auth2FAStatus = Status.ERROR;
+        this.error = error;
+    }
+
     /**
      * This method is used to notify client, that is waiting for response to 2FA request
      * @return {@link Status} instance:
@@ -49,7 +65,8 @@ public final class Auth2FARequest {
      * <p>{@code Status.ACCESS_DENIED} otherwise</p>
      * @throws InterruptedException if initiator's thread is being interrupted
      */
-    public synchronized Status notifyInitiator() throws InterruptedException{
+    @Override
+    public synchronized Status call() throws InterruptedException {
         System.out.println("initiator thread is waiting...");
         while (auth2FAStatus == Status.WAITING_FOR_CONFIRMATION){
             wait();
@@ -68,6 +85,6 @@ public final class Auth2FARequest {
     }
 
     public enum Status{
-        WAITING_FOR_CONFIRMATION, ACCESS_GRANTED, ACCESS_DENIED
+        WAITING_FOR_CONFIRMATION, ACCESS_GRANTED, ACCESS_DENIED, ERROR
     }
 }

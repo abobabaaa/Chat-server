@@ -27,7 +27,7 @@ public class DatabaseHandler {
             "[DATABASE]: WARNING! %s while trying to %s\n(%s)" +
             ConsoleColor.RESET_COLOR + "\n";
 
-    private static final String DB_MESSAGE = "[DATABASE]: %s";
+    private static final String DB_MESSAGE = "[DATABASE]: %s\n";
 
     public static Connection getConnection(){
         try {
@@ -458,7 +458,7 @@ public class DatabaseHandler {
 
             int rows = prstmt.executeUpdate();
             if (rows > 0){
-                System.out.printf(DB_MESSAGE, "Successfully removed 2FA request with id" + requestID + "!");
+                System.out.printf(DB_MESSAGE, "Successfully removed 2FA request with id " + requestID + "!");
             }
             else {
                 System.out.printf(

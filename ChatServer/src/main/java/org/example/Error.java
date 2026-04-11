@@ -16,8 +16,10 @@ public enum Error {
     AUTH_INCORRECT_PASSWORD(202,"Incorrect password"),
     AUTH_UNKNOWN_DEVICE(203,"Authorization attempt from unauthorized device"),
     AUTH_NO_DEVICE_UID(204,"Device UID wasn't specified in client request"),
-    AUTH_2FA_ACCESS_DENIED(205,"2FA request was rejected from authorized device"),
-    AUTH_2FA_REQUEST_NOT_FOUND(206, "2FA request with this id not found"),
+
+    AUTH_2FA_REQUEST_NOT_FOUND(206, "2FA request is not exists or expired"),
+    AUTH_2FA_TIMED_OUT(207, "2FA timed out"),
+    AUTH_2FA_INITIATOR_DISCONNECTED(208, "Initiator of 2FA request disconnected from server"),
 
     REG_USERNAME_OCCUPIED(101,"User with this username is already exists"),
 
